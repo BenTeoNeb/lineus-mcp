@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Minimal Line-us driver: TCP 1337, waits for ok/error after each command."""
-import math, socket, sys
+import math
+import socket
+import sys
 
 HOST, PORT = "line-us.local", 1337
 # Conservative safe box inside the non-rectangular drawing area (units ~20/mm)

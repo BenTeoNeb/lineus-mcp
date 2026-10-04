@@ -9,7 +9,6 @@ Writes harmonograph.json: a single stroke.
 """
 import json
 import math
-import sys
 
 W, H, MARGIN = 80.0, 45.0, 2.5
 STEP_MM = 1.4            # point spacing along the curve

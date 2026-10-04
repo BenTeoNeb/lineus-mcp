@@ -39,7 +39,7 @@ and a **simulated** one showing what the arm will actually put on paper. The sim
 applies the faults measured on this hardware: corners blended through by the firmware's
 one-command lookahead, and a short tick at both ends of every stroke, lying along the line
 to the shoulder because the pen-lift axis isn't vertical, and longer the further the arm
-reaches. The simulated image is also written to **`_preview.png`** next to the server,
+reaches. The simulated image is also written to **`~/.cache/lineus-mcp/preview.png`**,
 so you can watch iterations in any viewer that reloads on change. Pass `simulate=false`
 for the clean ink render instead.
 
@@ -155,9 +155,9 @@ construction, and there is no id to go stale.
 
 ## Handwriting
 
-Bundled in [`fonts/`](fonts/) are nine **single-line** faces under the SIL Open Font
+Bundled in [`data/fonts/`](src/lineus_mcp/data/fonts/) are nine **single-line** faces under the SIL Open Font
 License — real handwriting typefaces, not engraving fonts — with attribution in
-[`fonts/NOTICE.md`](fonts/NOTICE.md).
+[`NOTICE.md`](src/lineus_mcp/data/fonts/NOTICE.md).
 
 | | faces |
 |---|---|
@@ -174,7 +174,7 @@ most of them are a bad idea on a plotter — see below.
 
 Real drawings by real people, from Google's
 **[Quick, Draw! dataset](https://github.com/googlecreativelab/quickdraw-dataset)**
-(CC BY 4.0, attribution in [`doodles/NOTICE.md`](doodles/NOTICE.md)): 50 million doodles
+(CC BY 4.0, attribution in [`NOTICE.md`](src/lineus_mcp/data/doodles/NOTICE.md)): 50 million doodles
 in 345 categories. They're stored as **recorded pen strokes, in the order the person drew
 them**, not outlines or fills. So every line is one stroke and its width comes from the
 pen alone, and with `order="asis"` the robot replays a doodle stroke by stroke as it was
@@ -184,7 +184,7 @@ drawn.
 {"shapes": [{"doodle": "owl", "pick": 2, "box": [25, 3, 30, 39]}]}
 ```
 
-**Curated set.** 184 doodles in 31 categories ship in [`doodles/`](doodles/): animals, sun
+**Curated set.** 184 doodles in 31 categories ship in [`data/doodles/`](src/lineus_mcp/data/doodles/): animals, sun
 and moon, house, vehicles, objects. Every one was **chosen by eye**. Ranking alone isn't
 enough: the top-ranked candidates still included scribbles, drawings with the word written
 in them ("duck", "quack"), and a cat that reads as a bull.
@@ -224,37 +224,34 @@ corners. Other projects hardcode it. The envelope here was measured over 45 prob
 
 ## Install
 
-`uv` must be installed, and the config needs its **absolute** path — a GUI client such as
-Claude Desktop does not inherit your shell `PATH`, and a pyenv/asdf shim will not resolve.
-
-```sh
-command -v uv || echo "missing: brew install uv"
-pyenv which uv 2>/dev/null   # if uv came from pyenv, use this path
-```
+The server is a Python package with a `lineus-mcp` command. The simplest way to run it is
+`uvx`, which installs it into an isolated environment on first use. GUI clients such as
+Claude Desktop don't inherit your shell `PATH`, so give them the **absolute** path to
+`uvx` (`command -v uvx`; with pyenv, `pyenv which uvx`).
 
 **Claude Code**
 
 ```sh
 claude mcp add lineus -e LINEUS_HOST=line-us.local -- \
-  <abs-path-to-uv> run --script /path/to/lineus_mcp.py
+  uvx --from git+https://github.com/BenTeoNeb/lineus-mcp lineus-mcp
 ```
 
-**Claude Desktop** — edit `claude_desktop_config.json`, then restart:
+**Claude Desktop**: edit `claude_desktop_config.json`, then restart:
 
 ```json
 {
   "mcpServers": {
     "lineus": {
-      "command": "<abs-path-to-uv>",
-      "args": ["run", "--script", "/path/to/lineus_mcp.py"],
+      "command": "/absolute/path/to/uvx",
+      "args": ["--from", "git+https://github.com/BenTeoNeb/lineus-mcp", "lineus-mcp"],
       "env": { "LINEUS_HOST": "line-us.local" }
     }
   }
 }
 ```
 
-Dependencies are declared inline ([PEP 723](https://peps.python.org/pep-0723/)), so
-`uv run --script` fetches them on first run. No virtualenv to manage.
+**From a clone**, which is handy while changing the code: `uv run --directory
+/path/to/lineus-mcp lineus-mcp`, or `python -m lineus_mcp` inside its environment.
 
 **Try it without a robot:** set `LINEUS_MOCK=1`. Everything works except the moving.
 
@@ -269,7 +266,7 @@ Dependencies are declared inline ([PEP 723](https://peps.python.org/pep-0723/)),
 | `LINEUS_TIMEOUT` | `180` | Socket timeout in seconds |
 | `LINEUS_TRAVEL_SPEED` | `30` | `G94 P`, pen-*up* step size. Proven not to affect mark quality, so it is pure throughput |
 | `LINEUS_PEN_DOWN_Z` | `300` | How far down the pen goes. Not 0 — see the landing smear below |
-| `LINEUS_PREVIEW` | `./_preview.png` | Where the ink preview is written |
+| `LINEUS_PREVIEW` | `~/.cache/lineus-mcp/preview.png` | Where the simulated preview is written |
 | `LINEUS_NIB_MM` | `0.5` | Nib width for that preview. Set it when you change pens |
 | `LINEUS_JOIN_EM` | `0.13` | How close a cursive letter's exit must be to the next letter's entry to weld |
 | `LINEUS_BLEND_MM` | `1.5` | Corner-blending window used by the simulated preview |
@@ -339,7 +336,7 @@ and only a power cycle recovers it. The server floors speed at 2 for this reason
 
 ## Examples
 
-Scenes in [`examples/`](examples/), ready to pass straight to `preview_scene` — or
+Scenes in [`data/examples/`](src/lineus_mcp/data/examples/), ready to pass straight to `preview_scene` — or
 fetched by the agent with `get_example`, and best used as starting points ("the cat, lying
 down"). Each carries a `_comment` explaining what made it work:
 
@@ -354,7 +351,8 @@ down"). Each carries a `_comment` explaining what made it work:
 - `text_oneliners.json` — one-liners, with a note on why the page width sets your cap
   height rather than the box you ask for
 
-Standalone generator scripts, each printing a stroke list you can hand to `draw_paths`:
+Standalone generator scripts in [`examples/`](examples/), each printing a stroke list you
+can hand to `draw_paths`:
 
 - `harmonograph.py` — damped Lissajous figure, one unbroken stroke. The machine's best case.
 - `stipple.py` — tonal stippling by variable-radius Poisson sampling
@@ -363,8 +361,40 @@ Standalone generator scripts, each printing a stroke list you can hand to `draw_
 - `penhold.py` — parks the arm for pen-height adjustment
 - `corner_speed.py` — corner-sharpness test across the speed range
 
-`lineus.py` is a dependency-free 45-line driver, useful for poking the robot directly:
-`python3 lineus.py star`.
+`examples/raw_driver.py` is a dependency-free 45-line driver, useful for poking the robot
+directly: `python3 examples/raw_driver.py star`.
+
+## Development
+
+```
+src/lineus_mcp/
+  server.py     MCP tools, resources and the instructions every agent reads
+  scene.py      the scene language and its deterministic compiler
+  expr.py       sandboxed expressions behind parametric curves
+  geometry.py   ordering, fitting, splines, hatching
+  planner.py    weld, explode at junctions, dedupe, chain, one line
+  checks.py     drawing checks that report where a drawing will fail
+  machine.py    the envelope, the pen model, and the simulation of what it really draws
+  text.py       single-line handwriting faces and Hershey fonts
+  doodles.py    Quick, Draw!: the curated set, web fetch and cache
+  render.py     the diagnostic and ink renders
+  robot.py      the TCP link and background drawing jobs
+  config.py     every setting
+  data/         fonts, doodles and example scenes, shipped inside the package
+tests/          pytest: no robot, no network
+examples/       standalone generator scripts and a raw driver
+```
+
+```sh
+uv sync                                  # environment, with pytest and ruff
+uv run pytest                            # 100 tests, a few seconds
+uv run ruff check src tests examples
+```
+
+The tests need neither the robot nor the network. The server runs in mock mode, the doodle
+web fetch is tested against a fake network, and one test starts the real server over stdio
+and talks to it with the MCP client, which catches anything that would corrupt the protocol
+stream. CI runs lint and the tests on Python 3.10 to 3.13.
 
 ## Safety
 

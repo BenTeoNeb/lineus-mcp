@@ -1,0 +1,55 @@
+[project]
+name = "lineus-mcp"
+version = "0.1.0"
+description = "MCP server that lets an AI agent draw with a Line-us robot arm: a scene language, single-stroke handwriting and doodles, and a preview that simulates what the pen will really do."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "Benjamin Farcy" }]
+keywords = ["mcp", "model-context-protocol", "line-us", "pen-plotter", "generative-art"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent",
+  "Topic :: Artistic Software",
+]
+dependencies = [
+  "mcp>=1.2,<2",
+  "svgelements>=1.9",
+  "Hershey-Fonts>=2.1",
+  "pillow>=10",
+]
+
+[project.urls]
+Repository = "https://github.com/BenTeoNeb/lineus-mcp"
+
+[project.scripts]
+lineus-mcp = "lineus_mcp.server:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lineus_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "I"]
+ignore = [
+  "E701", "E702",   # short one-line statements are used deliberately for compact geometry
+  "E731",           # small lambdas as local helpers
+  "B905",           # zip(s, s[1:]) is the pairwise idiom: unequal lengths are the point
+]
+
+[tool.ruff.lint.per-file-ignores]
+"examples/*" = ["E", "B"]

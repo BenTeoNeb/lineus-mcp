@@ -64,6 +64,12 @@ mcp = FastMCP("lineus", instructions=(
     "- One-line art is ONE designed path through the figure (smooth control points, the "
     "line crossing itself to make the features). Do not draw separate pieces and glue "
     "them with join.one_line: the bridges read as glue.\n"
+    "- Overlapping shapes: set \"occlude\": true on the scene and list shapes back to "
+    "front, so nearer closed shapes hide what is behind them. Without it every outline "
+    "shows through and the drawing reads as a wireframe.\n"
+    "- To draw from a picture, trace it: {\"trace\": \"file.png\"} follows the centre "
+    "of each line. Works on clean line art; simplify busy images first, and remember the "
+    "page is small -- detail closer than ~1.15 mm at page size will blot.\n"
     "- Low-poly / geometric art is a mesh: use \"join\": {\"explode\": true, "
     "\"dedupe\": true}, or every shared edge is drawn twice and looks doubled.\n"
     "- Recognisability is silhouette and proportion, not detail. A fox is a hard taper "
@@ -210,7 +216,9 @@ def preview_scene(scene: dict, simulate: bool = True) -> list:
     preview_paths: a scene is ~50x smaller than the coordinates it compiles to, and
     draw_scene given the SAME scene provably draws what you previewed.
 
-    scene = {"shapes": [ ...shape... ], "fit": [x,y,w,h] (optional, scales the lot)}
+    scene = {"shapes": [ ...shape... ], "fit": [x,y,w,h] (optional, scales the lot),
+             "occlude": true or {"rejoin": bool} (optional: hidden-line removal, below),
+             "join": {...} (optional: explode/dedupe/chain/one_line stroke planning)}
 
     There is deliberately NO library of shapes -- a fixed catalogue would handle the
     dull cases and send everything interesting back to pasting raw points. Curves are
@@ -234,12 +242,28 @@ def preview_scene(scene: dict, simulate: bool = True) -> list:
       "doodle" "cat", with "pick" (index), "source" (auto|bundled|web) -- real drawings
                from Google's Quick, Draw!, single strokes in the order a person drew them.
                Call doodles() first to SEE the candidates and choose a pick.
+      "trace"  "path/to/drawing.png" (or a data: URL), or {"image": ..., "threshold":
+               0..255, "invert": bool, "resolution": px (600), "spur": 0.02, "smooth": 5}
+               -- a line-art IMAGE traced along the CENTRE of each line, so every line
+               becomes one stroke instead of an outline drawn twice. For dark lines on a
+               light background; solid black areas thin to a skeleton, so avoid them.
+               Fitted to the page unless given a box. Add "join": {"chain": true} to cut
+               the pen lifts (typically by half or more).
     Modifiers (any producer):
       "fill"      {"hatch":deg, "spacing":mm (default 1.15), "cross":bool,
                    "outline":bool} -- hatching is how you get solid black here
       "transform" {"translate":[dx,dy], "rotate":deg, "scale":s|[sx,sy], "about":[x,y]}
       "box"/"fit" [x,y,w,h]  scale this shape into a box
-      "repeat"    N, with i (0..N-1) and n available in the expressions"""
+      "repeat"    N, with i (0..N-1) and n available in the expressions
+      "opaque"    false: with scene "occlude", this shape hides nothing (default true)
+
+    "occlude": true is HIDDEN-LINE REMOVAL. List shapes BACK TO FRONT; every CLOSED
+    stroke (or filled shape) hides whatever earlier shapes drew underneath it, hatching
+    included. That is how one thing stands in front of another -- a paw over a body,
+    hills over mountains -- instead of every outline showing through. Open strokes never
+    hide anything. A ring drawn as two closed strokes keeps its hole see-through.
+    "occlude": {"rejoin": true} also re-joins hatching that occlusion cut into separate
+    spans (fewer pen lifts). Off by default: not yet compared on paper."""
     try:
         _, strokes, meta = compile_cached_full(scene)
     except ExprError as e:
@@ -279,7 +303,8 @@ def plan_scene(scene: dict) -> dict:
     if not pts:
         return {"error": "scene compiled to nothing"}
     speed = DEFAULT_SPEED
-    return {"scene_id": sid, "strokes": len(strokes), "points": len(pts),
+    extra = {"hidden_mm": meta["hidden_mm"]} if "hidden_mm" in meta else {}
+    return {**extra, "scene_id": sid, "strokes": len(strokes), "points": len(pts),
             "bbox_mm": [round(min(p[0] for p in pts), 2), round(min(p[1] for p in pts), 2),
                         round(max(p[0] for p in pts), 2), round(max(p[1] for p in pts), 2)],
             "pen_up_travel_mm": round(travel_mm(order_human(strokes))),

@@ -10,6 +10,7 @@ from .config import CANVAS_H, CANVAS_W, MAX_POINTS, Stroke
 from .doodles import doodle_strokes
 from .expr import Expr, ExprError
 from .geometry import apply_fit, catmull_rom, fit_params, hatch_polygon
+from .occlude import Occluder, closed_polygons, rejoin_hatch
 from .planner import plan_paths
 from .text import text_block
 
@@ -96,7 +97,11 @@ def _produce_one(shape: dict, i: int, n: int) -> list[Stroke]:
         for pth in raw:
             if not pth:
                 continue
-            pts = [(float(a), float(b)) for a, b in pth]
+            try:
+                pts = [(float(a), float(b)) for a, b in pth]
+            except (TypeError, ValueError):
+                raise ExprError("path points must be [u, v] NUMBERS; for computed "
+                                "coordinates use a \"param\" producer") from None
             if n:
                 pts = catmull_rom(pts, n, bool(shape.get("closed")))
             elif shape.get("closed") and len(pts) > 2:
@@ -108,13 +113,25 @@ def _produce_one(shape: dict, i: int, n: int) -> list[Stroke]:
         return doodle_strokes(str(shape["doodle"]), int(shape.get("pick", 0)),
                               shape.get("source", "auto"),
                               0 if sm is False else (6 if sm is True else int(sm or 0)))
+    if "trace" in shape:
+        from .trace import trace_strokes
+        t = shape["trace"]
+        t = {"image": t} if isinstance(t, str) else dict(t)
+        if "image" not in t:
+            raise ExprError('trace needs "image": a file path or a data: URL')
+        allowed = {"image", "threshold", "invert", "resolution", "spur", "smooth", "despeckle"}
+        bad = sorted(set(t) - allowed)
+        if bad:
+            raise ExprError(f"trace: unknown option(s) {bad}; allowed {sorted(allowed)}")
+        img = t.pop("image")
+        return trace_strokes(str(img), **t)
     if "text" in shape:
         return text_block(shape["text"], shape.get("font", "futural"),
                           shape.get("align", "left"), float(shape.get("leading", 1.4)))
     if "svg" in shape:
         return strokes_from_svg(shape["svg"])
-    raise ExprError(f"shape has no producer; expected one of param/path/paths/text/svg/doodle, "
-                    f"got keys {sorted(shape)}")
+    raise ExprError(f"shape has no producer; expected one of "
+                    f"param/path/paths/text/svg/doodle/trace, got keys {sorted(shape)}")
 
 
 def compile_scene_full(scene: dict) -> tuple[list[Stroke], dict]:
@@ -131,8 +148,17 @@ def compile_scene_full(scene: dict) -> tuple[list[Stroke], dict]:
     if not isinstance(scene, dict) or "shapes" not in scene:
         raise ExprError('scene must be {"shapes": [...]}')
     out: list[Stroke] = []
-    hatch: list[Stroke] = []       # fill lines: already optimally joined, never re-planned
+    # fill lines, one group per filled shape: already optimally joined, never re-planned.
+    # Each group remembers its spacing and what hid parts of it, so that after occlusion
+    # the cut-up serpentine can be re-joined without a connector crossing a front shape.
+    groups: list[dict] = []
     fills: list[Stroke] = []
+    occl = bool(scene.get("occlude"))
+    # Re-joining cut hatching is OPT-IN. It saves pen lifts, but the goal is the drawing,
+    # not throughput, and whether the joined serpentine looks better on paper than the
+    # separate spans has not been tested on the robot.
+    rejoin = isinstance(scene.get("occlude"), dict) and bool(scene["occlude"].get("rejoin"))
+    hidden_mm = 0.0
     for idx, shape in enumerate(scene["shapes"]):
         if not isinstance(shape, dict):
             raise ExprError(f"shape {idx} is not an object")
@@ -146,6 +172,7 @@ def compile_scene_full(scene: dict) -> tuple[list[Stroke], dict]:
                 raise ExprError(f"shape {idx}: {e}") from None
             fpolys: list[Stroke] = []
             hh: list[Stroke] = []
+            sp_eff = 0.0
             fill = shape.get("fill")
             if fill:
                 sp = float(fill.get("spacing", 1.15))
@@ -157,29 +184,64 @@ def compile_scene_full(scene: dict) -> tuple[list[Stroke], dict]:
                         hatched += hatch_polygon(s, ang + 90.0, sp)
                 fpolys = [list(s) for s in ss if len(s) >= 3]
                 hh = hatched
+                sp_eff = sp
                 ss = ss if fill.get("outline", True) else []
             if shape.get("transform"):
                 tr = shape["transform"]
                 ss, hh, fpolys = _transform(ss, tr), _transform(hh, tr), _transform(fpolys, tr)
+                sc = tr.get("scale", 1.0)
+                sp_eff *= (math.sqrt(abs(float(sc[0]) * float(sc[1])))
+                           if isinstance(sc, (list, tuple)) else abs(float(sc)))
             b = shape.get("box") or shape.get("fit") or (
-                [0, 0, CANVAS_W, CANVAS_H] if "doodle" in shape else None)
+                [0, 0, CANVAS_W, CANVAS_H] if ("doodle" in shape or "trace" in shape) else None)
             if b:
                 prm = fit_params(ss + hh, float(b[0]), float(b[1]), float(b[2]), float(b[3]))
                 ss, hh, fpolys = apply_fit(ss, prm), apply_fit(hh, prm), apply_fit(fpolys, prm)
+                if prm:
+                    sp_eff *= prm[0]
+            if occl and shape.get("opaque", True):
+                # painter's order: this instance hides whatever is already on the page.
+                # A filled shape is opaque over its fill polygon even if left open;
+                # otherwise only its CLOSED strokes enclose anything.
+                polys = [list(p) for p in fpolys] if fill else closed_polygons(ss)
+                if polys:
+                    occ = Occluder(polys)
+                    before = _ink(out)
+                    out = occ.clip(out)
+                    hidden_mm += before - _ink(out)
+                    for g in groups:
+                        before = _ink(g["s"])
+                        g["s"] = occ.clip(g["s"], keep_edges=not ss)
+                        lost = before - _ink(g["s"])
+                        if lost > 1e-9:
+                            hidden_mm += lost
+                            g["occ"].append(occ)
             out += ss
-            hatch += hh
+            if hh:
+                groups.append({"s": hh, "sp": sp_eff, "occ": []})
             fills += fpolys
+    hatch: list[Stroke] = []
+    for g in groups:
+        hatch += rejoin_hatch(g["s"], g["sp"], g["occ"]) if (rejoin and g["occ"]) else g["s"]
     if scene.get("fit"):
         b = scene["fit"]
         prm = fit_params(out + hatch, float(b[0]), float(b[1]), float(b[2]), float(b[3]))
         out, hatch, fills = apply_fit(out, prm), apply_fit(hatch, prm), apply_fit(fills, prm)
+        if prm:
+            hidden_mm *= prm[0]
     meta: dict = {"fills": fills}
+    if occl:
+        meta["hidden_mm"] = round(hidden_mm, 1)
     join = scene.get("join")
     if join:
         opts = join if isinstance(join, dict) else {}
         out, st = plan_paths(out, opts)
         meta["join_stats"] = st
     return [s for s in out + hatch if len(s) >= 1], meta
+
+
+def _ink(strokes: list[Stroke]) -> float:
+    return sum(math.dist(a, b) for s in strokes for a, b in zip(s, s[1:]))
 
 
 def compile_scene(scene: dict) -> list[Stroke]:

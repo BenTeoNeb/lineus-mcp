@@ -24,6 +24,7 @@ def test_corner_warning_only_fires_on_real_corners():
 def test_quiet_on_the_finished_drawings():
     assert not warnings_for(example("one_line_cat"))
     assert not warnings_for(example("geometric_fox"))
+    assert not warnings_for(example("layered_landscape"))
 
 
 def test_mesh_without_join_is_drawn_twice():

@@ -97,6 +97,7 @@ Expressions are evaluated by a whitelisted AST walk — no imports, no attribute
 | `path` / `paths` | raw points, the escape hatch |
 | `svg` | imported line art |
 | `doodle` | `"cat"` with `pick` and `source` — a real drawing from Quick, Draw!, see below |
+| `trace` | a line-art image traced along the centre of each line, see below |
 
 | modifier | |
 |---|---|
@@ -106,11 +107,78 @@ Expressions are evaluated by a whitelisted AST walk — no imports, no attribute
 | `transform` | `translate`, `rotate`, `scale`, `about` |
 | `box` / `fit` | scale this shape into `[x, y, w, h]` |
 | `repeat` | N, exposing `i` and `n` to the expressions |
+| `opaque` | `false` to stop this shape hiding anything when the scene occludes |
 
 `smooth` is what makes hand-drawn figures affordable: a cat is ~30 control points instead
 of ~400 sampled ones. It is *centripetal* Catmull-Rom specifically — the uniform
 parameterisation puts cusps and little self-intersecting loops wherever control points
 bunch up, which is exactly where a drawn figure has them.
+
+### Hidden lines
+
+A pen cannot paint over a line, so "in front of" has to be done by **not drawing** the part
+of an earlier stroke that a nearer shape covers. With `"occlude": true` on the scene, shapes
+are drawn back to front and every closed stroke, or filled shape, hides whatever is already
+underneath it, hatching included:
+
+```json
+{"occlude": true, "shapes": [
+  {"param": {"t": [0, 6.2832, 160], "x": "57+6*cos(t)", "y": "15+6*sin(t)", "closed": true}},
+  {"path": [[2,43],[2,27],[27,10],[45,17],[78,29],[78,43],[2,43]], "fill": {"hatch": 60, "spacing": 1.6}}
+]}
+```
+
+The sun is listed first, so the mountain hides its lower half. Without occlusion every
+outline shows through and the drawing reads as a wireframe. That one setting is the difference
+between overlapping shapes and line art: a paw in front of a body, hills in front of
+mountains. The details:
+
+- **Open strokes never hide anything.** Only an enclosed area can be in front.
+- **Even-odd.** A shape drawn as an outer and an inner closed stroke is a ring, and its hole
+  stays see-through.
+- **Shared edges survive.** A line lying exactly on the boundary of a nearer shape is
+  kept, so two shapes that share an edge both still have it. The exception is hatching
+  under a shape that draws its own outline: there, a hatch connector running along the
+  outline would be a second pass over the same line, broken into pieces that each land with
+  a smear, so it is dropped.
+- **Cut hatching can be re-joined, on request.** Hiding part of a fill cuts away the
+  serpentine's turns and leaves every span its own pen lift. `"occlude": {"rejoin": true}`
+  joins the pieces again where their ends are within 1.6 spacings, but only by a connector
+  that no front shape covers. A chord between two cut points on a circle would run inside
+  the circle, so it is refused. On the landscape example this takes 49 strokes down to 29.
+  It is **off by default**: fewer lifts is not automatically a better drawing, and the
+  separate spans may well look better on paper. That has not been tested on the robot yet.
+
+The same idea as vpype's `occult` plugin, done natively: `occult` needs vpype (Python ≥ 3.11)
+and shapely, and the geometry here is small enough for a segment-against-edge clip with a
+grid index in pure Python. `plan_scene` reports how much line was hidden (`hidden_mm`).
+
+### Tracing an image
+
+`{"trace": "drawing.png"}` turns a line-art image into strokes that follow the **centre**
+of each line. Ordinary tracing (potrace, Inkscape's default Trace Bitmap) follows the
+*edges* of the ink, so every line comes back as a thin closed outline and the pen draws it
+twice. Here the ink is thinned to a one-pixel skeleton (Zhang–Suen), read as a graph of
+endpoints and junctions, and each run between them becomes one stroke. Then:
+
+- **Whiskers** that thinning grows at corners are pruned. **Short separate strokes** are
+  not, because an eye, an eyebrow or a strand of hair is exactly that. An early version
+  pruned them as if they were whiskers and traced a face as a bare profile.
+- **Crossings.** Thinning splits an X into two Ts joined by a stub; those are collapsed back
+  into one junction.
+- **Junctions.** Thinning bends a line as it nears a junction; each run is cut back by a
+  line-width and reconnected straight to the junction centre.
+- **The pixel staircase** is smoothed away.
+
+Options: `threshold` (0–255, default Otsu), `invert` for light lines on dark,
+`resolution` (the long side, default 600 px), `spur`, `smooth`, `despeckle`. A trace is
+fitted to the page unless it has a `box`; add `"join": {"chain": true}` to merge the runs
+into trails. On a scanned comic that took 154 strokes to 64.
+
+It is for line art: dark lines, a few pixels thick, on a light background. A solid black
+area thins to its medial axis, which is rarely what you want. Hatch it instead. And the
+page is small: a busy picture fitted to 45 mm puts lines closer than the ~1.15 mm the nib
+can keep apart, which the drawing checks will point out.
 
 ### Planning the strokes
 
@@ -348,12 +416,16 @@ down"). Each carries a `_comment` explaining what made it work:
 - `geometric_fox.json` — a low-poly fox head, 48 triangles with solid-filled eyes and nose,
   no angle under 19°. Its mesh is 48 strokes and 1,075 mm of ink naively, 8 strokes and
   609 mm planned — exactly its unique edge length, so nothing is drawn twice
+- `layered_landscape.json` — sun, hatched mountains, hills and trees, listed back to front
+  with `"occlude": true`. Nothing is clipped by hand; turn occlusion off and every layer
+  shows through
 - `text_oneliners.json` — one-liners, with a note on why the page width sets your cap
   height rather than the box you ask for
 
 Standalone generator scripts in [`examples/`](examples/), each printing a stroke list you
 can hand to `draw_paths`:
 
+- `layered_landscape.py` — generates `layered_landscape.json`
 - `harmonograph.py` — damped Lissajous figure, one unbroken stroke. The machine's best case.
 - `stipple.py` — tonal stippling by variable-radius Poisson sampling
 - `ladybug_lines.py` — line art with hatched fills
@@ -373,6 +445,8 @@ src/lineus_mcp/
   expr.py       sandboxed expressions behind parametric curves
   geometry.py   ordering, fitting, splines, hatching
   planner.py    weld, explode at junctions, dedupe, chain, one line
+  occlude.py    hidden-line removal
+  trace.py      centerline tracing of line-art images
   checks.py     drawing checks that report where a drawing will fail
   machine.py    the envelope, the pen model, and the simulation of what it really draws
   text.py       single-line handwriting faces and Hershey fonts

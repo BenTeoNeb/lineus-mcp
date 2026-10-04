@@ -22,6 +22,7 @@ you      ──▶  Claude  ──▶  lineus-mcp  ──▶  TCP 1337  ──�
 | `plan_scene` | Stroke/point counts, bounding box, travel and warnings — without drawing or rendering |
 | `list_fonts` | The handwriting faces, with the measurements that say which will survive |
 | `get_example` | Finished drawings to start from instead of a blank page (also as `lineus://examples` resources) |
+| `doodles` | Real doodles from Google's Quick, Draw!: browse a numbered contact sheet, then pick one |
 | `preview_paths` / `preview_svg` / `preview_text` | Render a PNG of what *would* be drawn — no movement |
 | `draw_paths` | Polylines in millimetres: `[[[u,v], [u,v], ...], ...]` — the escape hatch |
 | `draw_svg` | SVG line art fitted into a box (strokes only; fills are not hatched) |
@@ -95,6 +96,7 @@ Expressions are evaluated by a whitelisted AST walk — no imports, no attribute
 | `text` | a string, or a list of `{"s", "font"}` for multi-font blocks |
 | `path` / `paths` | raw points, the escape hatch |
 | `svg` | imported line art |
+| `doodle` | `"cat"` with `pick` and `source` — a real drawing from Quick, Draw!, see below |
 
 | modifier | |
 |---|---|
@@ -168,6 +170,40 @@ that they join into one continuous stroke per word. "minimum" is 4 strokes, not 
 The classic [Hershey](https://en.wikipedia.org/wiki/Hershey_fonts) names still work, but
 most of them are a bad idea on a plotter — see below.
 
+## Doodles
+
+Real drawings by real people, from Google's
+**[Quick, Draw! dataset](https://github.com/googlecreativelab/quickdraw-dataset)**
+(CC BY 4.0, attribution in [`doodles/NOTICE.md`](doodles/NOTICE.md)): 50 million doodles
+in 345 categories. They're stored as **recorded pen strokes, in the order the person drew
+them**, not outlines or fills. So every line is one stroke and its width comes from the
+pen alone, and with `order="asis"` the robot replays a doodle stroke by stroke as it was
+drawn.
+
+```json
+{"shapes": [{"doodle": "owl", "pick": 2, "box": [25, 3, 30, 39]}]}
+```
+
+**Curated set.** 184 doodles in 31 categories ship in [`doodles/`](doodles/): animals, sun
+and moon, house, vehicles, objects. Every one was **chosen by eye**. Ranking alone isn't
+enough: the top-ranked candidates still included scribbles, drawings with the word written
+in them ("duck", "quack"), and a cat that reads as a bull.
+
+**Everything else is fetched on demand.** Any of the 345 categories can be used. The
+server reads the first ~600 KB of that category's file (several hundred drawings) with a
+byte-range request, ranks them, and caches the result under `~/.cache/lineus-mcp`. The
+cache is what keeps preview and draw identical. Category names are checked against the
+dataset's own list before anything is fetched, so the server can't be pointed at an
+arbitrary URL.
+
+**Look before picking.** `doodles("camel")` returns a numbered contact sheet. Web
+candidates get no human review, and quality depends on the subject: things with a
+distinctive silhouette (camel humps, ears, wheels) come out well, while scenes with detail
+(a lighthouse and its beam) are mostly unreadable. The ranking rejects scribbles and
+favours clean, moderate ink. A clean five-pointed star has about ten points, so an earlier
+ranking that rewarded detail threw away the good stars and kept the scribbled ones. But no
+score replaces looking.
+
 ## Coordinates
 
 Millimetres, origin top-left of the page, `u` right, `v` down.
@@ -238,6 +274,8 @@ Dependencies are declared inline ([PEP 723](https://peps.python.org/pep-0723/)),
 | `LINEUS_JOIN_EM` | `0.13` | How close a cursive letter's exit must be to the next letter's entry to weld |
 | `LINEUS_BLEND_MM` | `1.5` | Corner-blending window used by the simulated preview |
 | `LINEUS_TICK_MM` | `0.5` | Simulated stroke-end tick at radius 1500 units; scales with reach |
+| `LINEUS_CACHE` | `~/.cache/lineus-mcp` | Where fetched doodles are cached |
+| `LINEUS_QD_BYTES` | `600000` | How much of a Quick, Draw! category file to read when fetching |
 | `LINEUS_SWAP` / `LINEUS_FLIP_U` / `LINEUS_FLIP_V` | `1`/`0`/`0` | Orientation fixes |
 | `LINEUS_R_MAX` / `LINEUS_R_MIN` / `LINEUS_X_MIN` | `1850`/`650`/`650` | Envelope limits |
 

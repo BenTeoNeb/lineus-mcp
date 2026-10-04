@@ -849,6 +849,281 @@ def text_block(lines, font: str = "futural", align: str = "left",
     return out
 
 
+
+# ---------------------------------------------------------------- curves
+def catmull_rom(points: Stroke, samples: int = 12, closed: bool = False) -> Stroke:
+    """Smooth curve through control points -- CENTRIPETAL Catmull-Rom (alpha=0.5).
+
+    Centripetal, not uniform: the uniform parameterisation puts cusps and self-
+    intersecting loops wherever control points bunch up, which is exactly where a
+    hand-drawn figure has them. Centripetal is provably free of both.
+
+    This is what makes hand-authored art affordable. A figure is ~30 control points
+    instead of ~400 sampled ones, and the curve stays smooth under the firmware's
+    corner blending rather than fighting it.
+    """
+    pts = [tuple(map(float, p)) for p in points]
+    if len(pts) < 3:
+        return pts
+    if closed and math.dist(pts[0], pts[-1]) > 1e-9:
+        pts.append(pts[0])
+    if closed:
+        ctrl = [pts[-2]] + pts + [pts[1]]
+    else:
+        ctrl = [pts[0]] + pts + [pts[-1]]
+    out: Stroke = []
+    for i in range(len(ctrl) - 3):
+        p0, p1, p2, p3 = ctrl[i:i + 4]
+        # knot spacing by sqrt of chord length = centripetal
+        t0 = 0.0
+        t1 = t0 + max(math.dist(p0, p1), 1e-9) ** 0.5
+        t2 = t1 + max(math.dist(p1, p2), 1e-9) ** 0.5
+        t3 = t2 + max(math.dist(p2, p3), 1e-9) ** 0.5
+        for s in range(samples):
+            t = t1 + (t2 - t1) * s / samples
+
+            def lerp(a, b, ta, tb, tt):
+                if tb - ta < 1e-12:
+                    return a
+                k = (tt - ta) / (tb - ta)
+                return (a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k)
+
+            a1 = lerp(p0, p1, t0, t1, t)
+            a2 = lerp(p1, p2, t1, t2, t)
+            a3 = lerp(p2, p3, t2, t3, t)
+            b1 = lerp(a1, a2, t0, t2, t)
+            b2 = lerp(a2, a3, t1, t3, t)
+            out.append(lerp(b1, b2, t1, t2, t))
+    out.append(pts[-1])
+    return out
+
+
+# ---------------------------------------------------------------- stroke planning
+def explode(strokes: list[Stroke]) -> list[Stroke]:
+    """Break every polyline into individual segments, so the planner can see shared edges."""
+    out = []
+    for s in strokes:
+        for a, b in zip(s, s[1:]):
+            if math.dist(a, b) > 1e-9:
+                out.append([a, b])
+    return out
+
+
+def dedupe_strokes(strokes: list[Stroke], tol: float) -> tuple[list[Stroke], int]:
+    """Drop strokes that duplicate one already kept, in either direction.
+
+    A triangle mesh supplied as triangles draws every interior edge TWICE. On this
+    machine that is not merely wasted time: the second pass lands slightly off the first
+    and the edge reads as doubled -- the same fault that made Hershey's retracing faces
+    look scribbled.
+    """
+    q = max(tol, 1e-6)
+    seen: set = set()
+    out = []
+    for s in strokes:
+        if len(s) < 2:
+            continue
+        a = (round(s[0][0] / q), round(s[0][1] / q))
+        b = (round(s[-1][0] / q), round(s[-1][1] / q))
+        key = (a, b, len(s)) if a <= b else (b, a, len(s))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(s)
+    return out, len(strokes) - len(out)
+
+
+def chain_strokes(strokes: list[Stroke], weld: float) -> list[Stroke]:
+    """Join strokes whose ends meet into the FEWEST continuous trails.
+
+    This is Hierholzer with odd-vertex pairing, not greedy extension. Greedy looks
+    adequate and is not: it strands edges and leaves extra trails behind. Two triangles
+    sharing an edge have exactly two odd-degree vertices, so one Eulerian trail covers
+    them -- greedy returned two.
+
+    The theory gives the exact answer. A connected component with k odd-degree vertices
+    needs max(1, k/2) trails and no fewer, because every trail consumes two odd ends. So:
+    pair the odd vertices up with dummy edges, which makes the component Eulerian, find
+    the circuit, then cut it back open at the dummies. Pairing NEAREST-first is not
+    arbitrary either -- each dummy becomes a pen-up lift, so nearest pairing also
+    minimises the travel between the trails it creates.
+    """
+    q = max(weld, 1e-6)
+
+    def node(p):
+        return (round(p[0] / q), round(p[1] / q))
+
+    live = [list(s) for s in strokes if len(s) >= 2]
+    if not live:
+        return []
+    adj: dict = {}
+    for i, s in enumerate(live):
+        a, b = node(s[0]), node(s[-1])
+        adj.setdefault(a, []).append((i, b))
+        adj.setdefault(b, []).append((i, a))
+
+    # connected components over the endpoint graph
+    seen: set = set()
+    comps = []
+    for n0 in adj:
+        if n0 in seen:
+            continue
+        stack, comp = [n0], []
+        seen.add(n0)
+        while stack:
+            v = stack.pop()
+            comp.append(v)
+            for _e, w in adj[v]:
+                if w not in seen:
+                    seen.add(w)
+                    stack.append(w)
+        comps.append(comp)
+
+    dummy_of: dict = {}
+    next_edge = len(live)
+    for comp in comps:
+        odd = [n for n in comp if len(adj[n]) % 2 == 1]
+        while len(odd) >= 2:                      # pair nearest first
+            a = odd.pop(0)
+            j = min(range(len(odd)),
+                    key=lambda k: math.dist((a[0] * q, a[1] * q),
+                                            (odd[k][0] * q, odd[k][1] * q)))
+            b = odd.pop(j)
+            adj[a].append((next_edge, b))
+            adj[b].append((next_edge, a))
+            dummy_of[next_edge] = True
+            next_edge += 1
+
+    used = [False] * next_edge
+    ptr = {n: 0 for n in adj}
+    out: list[Stroke] = []
+
+    def walk(start_node):
+        """Hierholzer: returns the edge sequence of an Eulerian circuit from start."""
+        stack = [(start_node, None)]
+        order = []
+        while stack:
+            v, _e = stack[-1]
+            lst = adj[v]
+            while ptr[v] < len(lst) and used[lst[ptr[v]][0]]:
+                ptr[v] += 1
+            if ptr[v] == len(lst):
+                order.append(stack.pop())
+            else:
+                ei, w = lst[ptr[v]]
+                used[ei] = True
+                stack.append((w, ei))
+        order.reverse()
+        return [e for _n, e in order if e is not None]
+
+    for comp in comps:
+        starts = [n for n in comp if len(adj[n]) % 2 == 1] or comp
+        for s0 in starts:
+            if all(used[e] for e, _w in adj[s0]):
+                continue
+            edges = walk(s0)
+            # Cut the circuit back open at the dummies -- but ROTATE first so the
+            # sequence begins just after one. The walk is a CIRCUIT, so a dummy sitting
+            # mid-sequence would split a single trail into two halves that actually join
+            # end to end around the wrap. Rotating makes one dummy produce one cut.
+            cut = next((i for i, e in enumerate(edges) if e in dummy_of), None)
+            if cut is not None:
+                edges = edges[cut + 1:] + edges[:cut + 1]
+            run: Stroke = []
+            for e in edges:
+                if e in dummy_of:
+                    if len(run) >= 2:
+                        out.append(run)
+                    run = []
+                    continue
+                seg = list(live[e])
+                if not run:
+                    run = seg
+                else:
+                    if math.dist(run[-1], seg[0]) > math.dist(run[-1], seg[-1]):
+                        seg.reverse()
+                    run.extend(seg[1:])
+            if len(run) >= 2:
+                out.append(run)
+    return out
+
+
+def bridge(a_end: Stroke, b_start: Stroke, samples: int = 10) -> Stroke:
+    """A tangent-continuous hop from the end of one trail to the start of the next.
+
+    A straight connector reads as a mistake; the line has to LEAVE and REJOIN along the
+    direction it was already travelling, which is what makes a one-line drawing look
+    deliberate. Cubic Hermite with tangents taken from the adjoining segments.
+    The firmware's 1-2 mm corner blending then smooths any residual kink for us -- the
+    one place where that fault helps.
+    """
+    p0, p1 = a_end[-1], b_start[0]
+    d = math.dist(p0, p1)
+    if d < 1e-9:
+        return []
+    t0 = a_end[-1][0] - a_end[-2][0], a_end[-1][1] - a_end[-2][1]
+    t1 = b_start[1][0] - b_start[0][0], b_start[1][1] - b_start[0][1]
+    n0 = math.hypot(*t0) or 1.0
+    n1 = math.hypot(*t1) or 1.0
+    k = d * 0.6
+    m0 = (t0[0] / n0 * k, t0[1] / n0 * k)
+    m1 = (t1[0] / n1 * k, t1[1] / n1 * k)
+    out = []
+    for i in range(1, samples):
+        t = i / samples
+        h00 = 2 * t ** 3 - 3 * t ** 2 + 1
+        h10 = t ** 3 - 2 * t ** 2 + t
+        h01 = -2 * t ** 3 + 3 * t ** 2
+        h11 = t ** 3 - t ** 2
+        out.append((h00 * p0[0] + h10 * m0[0] + h01 * p1[0] + h11 * m1[0],
+                    h00 * p0[1] + h10 * m0[1] + h01 * p1[1] + h11 * m1[1]))
+    return out
+
+
+def to_one_line(strokes: list[Stroke]) -> list[Stroke]:
+    """Bridge every trail into a SINGLE continuous stroke, nearest end first."""
+    live = [list(s) for s in strokes if len(s) >= 2]
+    if len(live) <= 1:
+        return live
+    cur = live.pop(0)
+    while live:
+        best, rev, bd = 0, False, float("inf")
+        for i, s in enumerate(live):
+            for r in (False, True):
+                d = math.dist(cur[-1], s[-1] if r else s[0])
+                if d < bd:
+                    best, rev, bd = i, r, d
+        nxt = live.pop(best)
+        if rev:
+            nxt.reverse()
+        cur.extend(bridge(cur, nxt))
+        cur.extend(nxt)
+    return [cur]
+
+
+def plan_paths(strokes: list[Stroke], opts: dict) -> tuple[list[Stroke], dict]:
+    """Dedupe, weld and chain a pile of strokes; optionally reduce it to one line.
+
+    Fewer pen lifts is a QUALITY setting on this machine, not just a speed one: the nib
+    travels radially as it descends, so every lift costs a short drag at both ends.
+    """
+    before = len(strokes)
+    stats = {"strokes_in": before}
+    if opts.get("explode"):
+        strokes = explode(strokes)
+    weld = float(opts.get("weld", 0.3))
+    if opts.get("dedupe", True):
+        strokes, dropped = dedupe_strokes(strokes, weld)
+        stats["duplicates_dropped"] = dropped
+    if opts.get("chain", True):
+        strokes = chain_strokes(strokes, weld)
+    if opts.get("one_line"):
+        strokes = to_one_line(strokes)
+    stats["strokes_out"] = len(strokes)
+    stats["lifts_saved"] = max(0, before - len(strokes))
+    return strokes, stats
+
+
 # ---------------------------------------------------------------- scene compiler
 SCENE_VARS = ("t", "i", "n")
 
@@ -897,10 +1172,21 @@ def _produce_one(shape: dict, i: int, n: int) -> list[Stroke]:
         if p.get("closed"):
             pts.append(pts[0])
         return [pts]
-    if "path" in shape:
-        return [[(float(a), float(b)) for a, b in shape["path"]]]
-    if "paths" in shape:
-        return [[(float(a), float(b)) for a, b in pth] for pth in shape["paths"] if pth]
+    if "path" in shape or "paths" in shape:
+        raw = [shape["path"]] if "path" in shape else shape["paths"]
+        sm = shape.get("smooth")
+        n = 12 if sm is True else (int(sm) if sm else 0)
+        out = []
+        for pth in raw:
+            if not pth:
+                continue
+            pts = [(float(a), float(b)) for a, b in pth]
+            if n:
+                pts = catmull_rom(pts, n, bool(shape.get("closed")))
+            elif shape.get("closed") and len(pts) > 2:
+                pts = pts + [pts[0]]
+            out.append(pts)
+        return out
     if "text" in shape:
         return text_block(shape["text"], shape.get("font", "futural"),
                           shape.get("align", "left"), float(shape.get("leading", 1.4)))
@@ -942,6 +1228,9 @@ def compile_scene(scene: dict) -> list[Stroke]:
                 b = shape.get("box") or shape.get("fit")
                 ss = fit(ss, float(b[0]), float(b[1]), float(b[2]), float(b[3]))
             out += ss
+    join = scene.get("join")
+    if join:
+        out, _ = plan_paths(out, join if isinstance(join, dict) else {})
     if scene.get("fit"):
         b = scene["fit"]
         out = fit(out, float(b[0]), float(b[1]), float(b[2]), float(b[3]))

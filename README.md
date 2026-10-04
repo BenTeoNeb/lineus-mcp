@@ -74,10 +74,50 @@ Expressions are evaluated by a whitelisted AST walk — no imports, no attribute
 
 | modifier | |
 |---|---|
+| `smooth` | `true`, or samples per span — centripetal Catmull-Rom through the control points |
+| `closed` | close the path before smoothing |
 | `fill` | `{"hatch": deg, "spacing": mm, "cross": bool}` — how you get solid black here |
 | `transform` | `translate`, `rotate`, `scale`, `about` |
 | `box` / `fit` | scale this shape into `[x, y, w, h]` |
 | `repeat` | N, exposing `i` and `n` to the expressions |
+
+`smooth` is what makes hand-drawn figures affordable: a cat is ~30 control points instead
+of ~400 sampled ones. It is *centripetal* Catmull-Rom specifically — the uniform
+parameterisation puts cusps and little self-intersecting loops wherever control points
+bunch up, which is exactly where a drawn figure has them.
+
+### Planning the strokes
+
+A scene-level `"join"` block rewrites the whole pile of strokes before drawing:
+
+```json
+"join": {"explode": true, "dedupe": true, "chain": true, "one_line": false, "weld": 0.3}
+```
+
+| | |
+|---|---|
+| `explode` | break polylines into segments first, so shared edges become visible |
+| `dedupe` | drop segments already drawn — **on by default** |
+| `chain` | join strokes that meet into the fewest continuous trails |
+| `one_line` | bridge every trail into a single unbroken stroke |
+| `weld` | how close two ends must be to count as touching, in mm |
+
+This matters more than it sounds. A triangle mesh supplied as triangles **redraws every
+interior edge twice**: on the bundled fox, 575 mm of ink against 361 mm planned, and the
+repeat lands slightly off the original so the edge reads as doubled. Planned, it also
+drops from 22 strokes to 7 — and every pen lift costs a landing smear, so fewer lifts is
+a quality setting here, not just a faster one.
+
+`chain` is Hierholzer with odd-vertex pairing, not greedy extension. Greedy looks fine and
+is not: it strands edges and leaves extra trails. A component with *k* odd-degree vertices
+needs exactly `max(1, k/2)` trails, so the odd vertices are paired with dummy edges, the
+Eulerian circuit is found, and the circuit is cut back open at the dummies. Pairing nearest
+first also minimises the travel between the trails that result.
+
+`one_line` bridges with **tangent-continuous** cubic Hermite hops — the line leaves and
+rejoins along the direction it was already travelling, because a straight connector reads
+as a mistake. The firmware's 1–2 mm corner blending then smooths any residual kink, which
+is the one place that fault helps us.
 
 Variables are `t`, plus `i` and `n` inside a `repeat`. Functions: `sin cos tan asin acos
 atan atan2 sinh cosh tanh exp log sqrt hypot floor ceil fmod degrees radians abs min max
@@ -240,6 +280,8 @@ Scenes in [`examples/`](examples/), ready to pass straight to `preview_scene`:
 - `scene_demo.json` — text, a hatched blob, a harmonograph and a repeat family.
   473 characters of geometry compiling to 1,836 points (the file is longer; it is
   commented)
+- `geometric_fox.json` — a low-poly head as a triangle mesh, showing what `join` does to
+  one: 22 strokes and 575 mm of ink become 7 strokes and 361 mm
 - `text_oneliners.json` — one-liners, with a note on why the page width sets your cap
   height rather than the box you ask for
 

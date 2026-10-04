@@ -21,6 +21,7 @@ you      ──▶  Claude  ──▶  lineus-mcp  ──▶  TCP 1337  ──�
 | `preview_scene` / `draw_scene` | **The main interface.** A declarative scene, compiled to strokes server-side |
 | `plan_scene` | Stroke/point counts, bounding box, travel and warnings — without drawing or rendering |
 | `list_fonts` | The handwriting faces, with the measurements that say which will survive |
+| `get_example` | Finished drawings to start from instead of a blank page (also as `lineus://examples` resources) |
 | `preview_paths` / `preview_svg` / `preview_text` | Render a PNG of what *would* be drawn — no movement |
 | `draw_paths` | Polylines in millimetres: `[[[u,v], [u,v], ...], ...]` — the escape hatch |
 | `draw_svg` | SVG line art fitted into a box (strokes only; fills are not hatched) |
@@ -32,12 +33,35 @@ you      ──▶  Claude  ──▶  lineus-mcp  ──▶  TCP 1337  ──�
 Drawing is asynchronous: `draw_*` returns a `job_id`, and you poll `get_job`.
 Only one drawing runs at a time.
 
-Every `preview_*` also writes **`_preview.png`** next to the server — an ink-only render at
-true nib width, so you can watch your own iterations in any image viewer that reloads on
-change. That is a different picture from the one the agent gets, which adds the envelope,
-the page and the pen-up travel. The ink view is the one that catches a curve whose loops
-are closer together than the nib is wide: it looks like a lovely wire figure at two pixels
-per line and comes out as a solid black lozenge at 0.5 mm.
+Every `preview_*` returns two pictures: a **diagnostic** view (envelope, page, pen-up travel)
+and a **simulated** one showing what the arm will actually put on paper. The simulation
+applies the faults measured on this hardware: corners blended through by the firmware's
+one-command lookahead, and a short tick at both ends of every stroke, lying along the line
+to the shoulder because the pen-lift axis isn't vertical, and longer the further the arm
+reaches. The simulated image is also written to **`_preview.png`** next to the server,
+so you can watch iterations in any viewer that reloads on change. Pass `simulate=false`
+for the clean ink render instead.
+
+Judge drawings by the simulation, not the clean render. Every drawing in this project
+that disappointed on paper had looked fine as a clean render.
+
+### Drawing checks
+
+`preview_scene`, `draw_scene` and `plan_scene` also run checks that report **where** to fix
+something, in page millimetres. Each check exists because the mistake was actually made:
+
+| check | catches |
+|---|---|
+| same line twice | a mesh drawn without `join`, so every shared edge doubles |
+| lines merging | two lines running within 1.1 mm without meeting — parallels that blot, sliver triangles that fill in, an eye too narrow to stay open |
+| glued one-line | `one_line` bridging several separate pieces, which reads as glue |
+
+They're measured as *runs* along the line, so a crossing doesn't count. Two lines that cross
+come together only briefly; that's the difference from either fault. Fills are exempt,
+since blotting is the point there.
+
+What no check can catch is bad drawing: proportion, silhouette, character. That knowledge
+is in the server's instructions, which every agent reads on connecting, and in the examples.
 
 ## Scenes
 
@@ -91,7 +115,7 @@ bunch up, which is exactly where a drawn figure has them.
 A scene-level `"join"` block rewrites the whole pile of strokes before drawing:
 
 ```json
-"join": {"explode": true, "dedupe": true, "chain": true, "one_line": false, "weld": 0.3}
+{"join": {"explode": true, "dedupe": true, "chain": true, "one_line": false, "weld": 0.3}}
 ```
 
 | | |
@@ -103,9 +127,9 @@ A scene-level `"join"` block rewrites the whole pile of strokes before drawing:
 | `weld` | how close two ends must be to count as touching, in mm |
 
 This matters more than it sounds. A triangle mesh supplied as triangles **redraws every
-interior edge twice**: on the bundled fox, 1,155 mm of ink against 680 mm planned — 41%
+interior edge twice**: on the bundled fox, 1,075 mm of ink against 609 mm planned — 43%
 of the drawing — and the repeat lands slightly off the original so the edge reads as
-doubled. Planned, it also drops from 50 strokes to 9 — and every pen lift costs a landing smear, so fewer lifts is
+doubled. Planned, it also drops from 48 strokes to 8 — and every pen lift costs a landing smear, so fewer lifts is
 a quality setting here, not just a faster one.
 
 `chain` is Hierholzer with odd-vertex pairing, not greedy extension. Greedy looks fine and
@@ -212,6 +236,8 @@ Dependencies are declared inline ([PEP 723](https://peps.python.org/pep-0723/)),
 | `LINEUS_PREVIEW` | `./_preview.png` | Where the ink preview is written |
 | `LINEUS_NIB_MM` | `0.5` | Nib width for that preview. Set it when you change pens |
 | `LINEUS_JOIN_EM` | `0.13` | How close a cursive letter's exit must be to the next letter's entry to weld |
+| `LINEUS_BLEND_MM` | `1.5` | Corner-blending window used by the simulated preview |
+| `LINEUS_TICK_MM` | `0.5` | Simulated stroke-end tick at radius 1500 units; scales with reach |
 | `LINEUS_SWAP` / `LINEUS_FLIP_U` / `LINEUS_FLIP_V` | `1`/`0`/`0` | Orientation fixes |
 | `LINEUS_R_MAX` / `LINEUS_R_MIN` / `LINEUS_X_MIN` | `1850`/`650`/`650` | Envelope limits |
 
@@ -275,16 +301,18 @@ and only a power cycle recovers it. The server floors speed at 2 for this reason
 
 ## Examples
 
-Scenes in [`examples/`](examples/), ready to pass straight to `preview_scene`:
+Scenes in [`examples/`](examples/), ready to pass straight to `preview_scene` — or
+fetched by the agent with `get_example`, and best used as starting points ("the cat, lying
+down"). Each carries a `_comment` explaining what made it work:
 
 - `scene_demo.json` — text, a hatched blob, a harmonograph and a repeat family.
   473 characters of geometry compiling to 1,836 points (the file is longer; it is
   commented)
 - `one_line_cat.json` — a sitting cat in a single continuous line. One *designed* path,
   not an outline with details bridged on: bridging separate pieces reads as glue
-- `geometric_fox.json` — a low-poly fox head, 48 designed triangles with solid-filled eyes
-  and nose. Its mesh is 50 strokes and 1,155 mm of ink naively, 9 strokes and 680 mm
-  planned
+- `geometric_fox.json` — a low-poly fox head, 48 triangles with solid-filled eyes and nose,
+  no angle under 19°. Its mesh is 48 strokes and 1,075 mm of ink naively, 8 strokes and
+  609 mm planned — exactly its unique edge length, so nothing is drawn twice
 - `text_oneliners.json` — one-liners, with a note on why the page width sets your cap
   height rather than the box you ask for
 

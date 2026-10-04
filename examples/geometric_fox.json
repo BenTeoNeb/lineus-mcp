@@ -1,4 +1,5 @@
 {
+ "_comment": "Low-poly fox head, 48 triangles, mirrored. A fox rather than a cat because the face tapers hard from pointed cheek ruffs into a long narrow snout. Eyes and nose are hatch-filled at 0.45 mm, below the 1.15 mm blot limit on purpose: inside an eye, solid is the goal. The mesh was cleaned with Lawson edge flips and one vertex removed, so no triangle has an angle under 19 degrees -- thinner slivers blot into dark wedges, which the server's drawing checks flag. The join block is what makes it draw correctly: supplied as triangles it would redraw every interior edge twice.",
  "shapes": [
   {
    "paths": [
@@ -44,8 +45,8 @@
       18
      ],
      [
-      2,
-      38
+      36,
+      32
      ],
      [
       34,
@@ -94,30 +95,8 @@
     ],
     [
      [
-      2,
-      38
-     ],
-     [
-      34,
-      22
-     ],
-     [
-      36,
-      32
-     ],
-     [
-      2,
-      38
-     ]
-    ],
-    [
-     [
-      2,
-      38
-     ],
-     [
-      36,
-      32
+      20,
+      18
      ],
      [
       23,
@@ -126,6 +105,28 @@
      [
       2,
       38
+     ],
+     [
+      20,
+      18
+     ]
+    ],
+    [
+     [
+      20,
+      18
+     ],
+     [
+      31,
+      39
+     ],
+     [
+      23,
+      44
+     ],
+     [
+      20,
+      18
      ]
     ],
     [
@@ -148,20 +149,20 @@
     ],
     [
      [
-      36,
-      32
+      20,
+      18
      ],
      [
       31,
       39
      ],
      [
-      23,
-      44
-     ],
-     [
       36,
       32
+     ],
+     [
+      20,
+      18
      ]
     ],
     [
@@ -202,30 +203,8 @@
     ],
     [
      [
-      0,
-      56
-     ],
-     [
       23,
       44
-     ],
-     [
-      28,
-      55
-     ],
-     [
-      0,
-      56
-     ]
-    ],
-    [
-     [
-      0,
-      56
-     ],
-     [
-      28,
-      55
      ],
      [
       13,
@@ -234,6 +213,28 @@
      [
       0,
       56
+     ],
+     [
+      23,
+      44
+     ]
+    ],
+    [
+     [
+      23,
+      44
+     ],
+     [
+      13,
+      64
+     ],
+     [
+      28,
+      55
+     ],
+     [
+      23,
+      44
      ]
     ],
     [
@@ -257,6 +258,10 @@
     [
      [
       40,
+      48
+     ],
+     [
+      60,
       48
      ],
      [
@@ -264,10 +269,6 @@
       34
      ],
      [
-      50,
-      56
-     ],
-     [
       40,
       48
      ]
@@ -346,30 +347,8 @@
     ],
     [
      [
-      41,
-      58
-     ],
-     [
       50,
       56
-     ],
-     [
-      50,
-      84
-     ],
-     [
-      41,
-      58
-     ]
-    ],
-    [
-     [
-      41,
-      58
-     ],
-     [
-      50,
-      84
      ],
      [
       44,
@@ -378,6 +357,28 @@
      [
       41,
       58
+     ],
+     [
+      50,
+      56
+     ]
+    ],
+    [
+     [
+      56,
+      81
+     ],
+     [
+      50,
+      56
+     ],
+     [
+      59,
+      58
+     ],
+     [
+      56,
+      81
      ]
     ],
     [
@@ -396,24 +397,6 @@
      [
       41,
       58
-     ]
-    ],
-    [
-     [
-      44,
-      81
-     ],
-     [
-      50,
-      84
-     ],
-     [
-      50,
-      102
-     ],
-     [
-      44,
-      81
      ]
     ],
     [
@@ -476,12 +459,12 @@
       18
      ],
      [
-      98,
-      38
+      77,
+      44
      ],
      [
-      66,
-      22
+      98,
+      38
      ],
      [
       80,
@@ -526,38 +509,38 @@
     ],
     [
      [
-      98,
-      38
+      80,
+      18
+     ],
+     [
+      64,
+      32
      ],
      [
       66,
       22
      ],
      [
-      64,
-      32
-     ],
-     [
-      98,
-      38
+      80,
+      18
      ]
     ],
     [
      [
-      98,
-      38
+      80,
+      18
+     ],
+     [
+      69,
+      39
      ],
      [
       64,
       32
      ],
      [
-      77,
-      44
-     ],
-     [
-      98,
-      38
+      80,
+      18
      ]
     ],
     [
@@ -580,8 +563,8 @@
     ],
     [
      [
-      64,
-      32
+      80,
+      18
      ],
      [
       69,
@@ -592,8 +575,8 @@
       44
      ],
      [
-      64,
-      32
+      80,
+      18
      ]
     ],
     [
@@ -634,30 +617,8 @@
     ],
     [
      [
-      100,
-      56
-     ],
-     [
       77,
       44
-     ],
-     [
-      72,
-      55
-     ],
-     [
-      100,
-      56
-     ]
-    ],
-    [
-     [
-      100,
-      56
-     ],
-     [
-      72,
-      55
      ],
      [
       87,
@@ -666,6 +627,28 @@
      [
       100,
       56
+     ],
+     [
+      77,
+      44
+     ]
+    ],
+    [
+     [
+      77,
+      44
+     ],
+     [
+      87,
+      64
+     ],
+     [
+      72,
+      55
+     ],
+     [
+      77,
+      44
      ]
     ],
     [
@@ -688,19 +671,19 @@
     ],
     [
      [
-      60,
+      40,
       48
      ],
      [
-      50,
-      34
+      60,
+      48
      ],
      [
       50,
       56
      ],
      [
-      60,
+      40,
       48
      ]
     ],
@@ -778,38 +761,20 @@
     ],
     [
      [
-      59,
-      58
+      56,
+      81
      ],
      [
       50,
       56
      ],
      [
-      50,
-      84
-     ],
-     [
-      59,
-      58
-     ]
-    ],
-    [
-     [
-      59,
-      58
-     ],
-     [
-      50,
-      84
+      44,
+      81
      ],
      [
       56,
       81
-     ],
-     [
-      59,
-      58
      ]
     ],
     [
@@ -828,24 +793,6 @@
      [
       59,
       58
-     ]
-    ],
-    [
-     [
-      56,
-      81
-     ],
-     [
-      50,
-      84
-     ],
-     [
-      50,
-      102
-     ],
-     [
-      56,
-      81
      ]
     ],
     [
@@ -900,6 +847,24 @@
      [
       77,
       44
+     ]
+    ],
+    [
+     [
+      44,
+      81
+     ],
+     [
+      56,
+      81
+     ],
+     [
+      50,
+      102
+     ],
+     [
+      44,
+      81
      ]
     ]
    ]
@@ -987,6 +952,5 @@
   "explode": true,
   "dedupe": true,
   "chain": true
- },
- "_comment": "Low-poly fox head, 48 designed triangles, mirrored. A fox, not a cat, because the face tapers hard from pointed cheek ruffs into a long narrow snout. Eyes and nose are hatch-filled at 0.45 mm, BELOW the 1.15 mm blot limit on purpose: inside an eye, blotting solid is the goal. The join block is what makes the mesh draw correctly -- supplied as triangles it would redraw every interior edge twice."
+ }
 }

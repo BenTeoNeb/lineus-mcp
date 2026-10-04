@@ -307,18 +307,28 @@ def travel_mm(strokes: list[Stroke]) -> float:
         d += math.dist(cur, s[0]); cur = s[-1]
     return d
 
-def fit(strokes: list[Stroke], x: float, y: float, w: float, h: float) -> list[Stroke]:
-    """Scale strokes uniformly to fit the box (x,y,w,h) in canvas mm, centred."""
+def fit_params(strokes: list[Stroke], x: float, y: float, w: float, h: float):
+    """Uniform scale and offset that fits strokes into the box (x,y,w,h), centred."""
     pts = [p for s in strokes for p in s]
     if not pts:
-        return []
+        return None
     minx, maxx = min(p[0] for p in pts), max(p[0] for p in pts)
     miny, maxy = min(p[1] for p in pts), max(p[1] for p in pts)
     sw, sh = max(maxx - minx, 1e-9), max(maxy - miny, 1e-9)
     k = min(w / sw, h / sh)
-    ox = x + (w - sw * k) / 2 - minx * k
-    oy = y + (h - sh * k) / 2 - miny * k
+    return k, x + (w - sw * k) / 2 - minx * k, y + (h - sh * k) / 2 - miny * k
+
+
+def apply_fit(strokes: list[Stroke], params) -> list[Stroke]:
+    if params is None:
+        return [list(s) for s in strokes]
+    k, ox, oy = params
     return [[(px * k + ox, py * k + oy) for px, py in s] for s in strokes]
+
+
+def fit(strokes: list[Stroke], x: float, y: float, w: float, h: float) -> list[Stroke]:
+    """Scale strokes uniformly to fit the box (x,y,w,h) in canvas mm, centred."""
+    return apply_fit(strokes, fit_params(strokes, x, y, w, h))
 
 def clearance_check(strokes: list[Stroke]) -> list[str]:
     """Warn where the pen may not lift clear of the paper.
@@ -485,17 +495,36 @@ def render_ink_png(strokes: list[Stroke], nib_mm: float = NIB_MM,
     buf = io.BytesIO(); img.save(buf, "PNG"); return buf.getvalue()
 
 
-def write_preview(strokes: list[Stroke]) -> str:
-    """Write the ink view where the user can open it. Returns a note for the tool result."""
+def write_preview(strokes: list[Stroke], simulate: bool = True) -> tuple[str, bytes]:
+    """Write the preview the user can open, and return (note, png).
+
+    Simulated by default: the clean render is what you meant, the simulated one is what
+    the paper will get, and only the second has ever predicted a disappointment.
+    """
+    shown = simulate_strokes(strokes) if simulate else strokes
+    png = render_ink_png(shown)
+    what = ("SIMULATED -- corners blended by the firmware's ~1.5 mm lookahead and a radial "
+            "tick at each stroke end, as measured on this arm" if simulate else
+            f"clean ink at true {NIB_MM} mm nib, no travel lines")
     try:
         with open(PREVIEW_PATH, "wb") as fh:
-            fh.write(render_ink_png(strokes))
-        return (f"Ink preview (true {NIB_MM} mm nib, no travel lines) written to "
-                f"{PREVIEW_PATH} — open it once and it reloads in place on every preview. "
-                f"The image returned alongside is the diagnostic view: green envelope, "
-                f"grey page, pink pen-up travel.")
+            fh.write(png)
+        return (f"Preview written to {PREVIEW_PATH} ({what}); it reloads in place on every "
+                f"preview. Judge the drawing by the simulated image, not the diagnostic one "
+                f"(green envelope, grey page, pink pen-up travel)."), png
     except OSError as e:
-        return f"could not write {PREVIEW_PATH}: {e}"
+        return f"could not write {PREVIEW_PATH}: {e}", png
+
+
+def _preview_result(strokes: list[Stroke], simulate: bool, warnings: list[str] | None = None):
+    note, png = write_preview(strokes, simulate)
+    if warnings:
+        note += "\nDRAWING CHECKS:\n- " + "\n- ".join(warnings)
+    out = [Image(data=render_png(strokes), format="png")]
+    if simulate:
+        out.append(Image(data=png, format="png"))
+    out.append(note)
+    return out
 
 
 # ---------------------------------------------------------------- sources
@@ -899,13 +928,65 @@ def catmull_rom(points: Stroke, samples: int = 12, closed: bool = False) -> Stro
 
 
 # ---------------------------------------------------------------- stroke planning
-def explode(strokes: list[Stroke]) -> list[Stroke]:
-    """Break every polyline into individual segments, so the planner can see shared edges."""
+class _Welder:
+    """Snap points to canonical ids: points within `tol` share one.
+
+    Rounding to a grid is NOT a tolerance -- two points 0.01 mm apart can straddle a cell
+    boundary while two 0.29 mm apart share a cell -- so this searches the neighbouring
+    cells and measures the real distance.
+    """
+
+    def __init__(self, tol: float):
+        self.tol = max(tol, 1e-6)
+        self.cells: dict = {}
+        self.pts: list = []
+
+    def id(self, p) -> int:
+        cx, cy = math.floor(p[0] / self.tol), math.floor(p[1] / self.tol)
+        best, bd = None, self.tol
+        for gx in (cx - 1, cx, cx + 1):
+            for gy in (cy - 1, cy, cy + 1):
+                for k in self.cells.get((gx, gy), ()):
+                    d = math.dist(p, self.pts[k])
+                    if d <= bd:
+                        best, bd = k, d
+        if best is None:
+            best = len(self.pts)
+            self.pts.append(p)
+            self.cells.setdefault((cx, cy), []).append(best)
+        return best
+
+
+def explode(strokes: list[Stroke], tol: float = 0.3) -> list[Stroke]:
+    """Split polylines at their JUNCTIONS, so shared edges become visible to the planner.
+
+    A junction is a vertex shared with another stroke, or revisited by the same one.
+    Splitting at EVERY vertex instead -- the first version -- breaks on anything dense: a
+    smooth curve is sampled every ~0.1 mm, finer than the weld tolerance, so neighbouring
+    samples weld into one node and the graph scrambles. On the fox that made the planner
+    invent 28 segments and drop 27, and walk one edge there and straight back.
+    """
+    w = _Welder(tol)
+    ids = [[w.id(p) for p in s] for s in strokes]
+    count: dict = {}
+    for row in ids:
+        prev = None
+        for k in row:
+            if k != prev:
+                count[k] = count.get(k, 0) + 1
+            prev = k
     out = []
-    for s in strokes:
-        for a, b in zip(s, s[1:]):
-            if math.dist(a, b) > 1e-9:
-                out.append([a, b])
+    for s, row in zip(strokes, ids):
+        if len(s) < 2:
+            continue
+        cur = [s[0]]
+        for j in range(1, len(s)):
+            cur.append(s[j])
+            if j < len(s) - 1 and count.get(row[j], 0) > 1:
+                out.append(cur)
+                cur = [s[j]]
+        if len(cur) >= 2:
+            out.append(cur)
     return out
 
 
@@ -915,17 +996,22 @@ def dedupe_strokes(strokes: list[Stroke], tol: float) -> tuple[list[Stroke], int
     A triangle mesh supplied as triangles draws every interior edge TWICE. On this
     machine that is not merely wasted time: the second pass lands slightly off the first
     and the edge reads as doubled -- the same fault that made Hershey's retracing faces
-    look scribbled.
+    look scribbled. Two pieces are the same if they share both ends AND their midpoint,
+    so two different curves between the same junctions are not mistaken for one.
     """
-    q = max(tol, 1e-6)
+    w = _Welder(tol)
     seen: set = set()
     out = []
     for s in strokes:
         if len(s) < 2:
             continue
-        a = (round(s[0][0] / q), round(s[0][1] / q))
-        b = (round(s[-1][0] / q), round(s[-1][1] / q))
-        key = (a, b, len(s)) if a <= b else (b, a, len(s))
+        # the midpoint must not depend on direction: for a two-point segment s[len//2] is
+        # the SECOND point, so A->B and B->A got different keys and nothing deduped
+        n = len(s)
+        m0, m1 = s[(n - 1) // 2], s[n // 2]
+        mid = w.id(((m0[0] + m1[0]) / 2, (m0[1] + m1[1]) / 2))
+        a, b = w.id(s[0]), w.id(s[-1])
+        key = (min(a, b), max(a, b), mid)
         if key in seen:
             continue
         seen.add(key)
@@ -948,14 +1034,15 @@ def chain_strokes(strokes: list[Stroke], weld: float) -> list[Stroke]:
     arbitrary either -- each dummy becomes a pen-up lift, so nearest pairing also
     minimises the travel between the trails it creates.
     """
-    q = max(weld, 1e-6)
-
-    def node(p):
-        return (round(p[0] / q), round(p[1] / q))
-
+    welder = _Welder(weld)
     live = [list(s) for s in strokes if len(s) >= 2]
     if not live:
         return []
+    canon = welder.pts
+
+    def node(p):
+        return welder.id(p)
+
     adj: dict = {}
     for i, s in enumerate(live):
         a, b = node(s[0]), node(s[-1])
@@ -985,9 +1072,7 @@ def chain_strokes(strokes: list[Stroke], weld: float) -> list[Stroke]:
         odd = [n for n in comp if len(adj[n]) % 2 == 1]
         while len(odd) >= 2:                      # pair nearest first
             a = odd.pop(0)
-            j = min(range(len(odd)),
-                    key=lambda k: math.dist((a[0] * q, a[1] * q),
-                                            (odd[k][0] * q, odd[k][1] * q)))
+            j = min(range(len(odd)), key=lambda k: math.dist(canon[a], canon[odd[k]]))
             b = odd.pop(j)
             adj[a].append((next_edge, b))
             adj[b].append((next_edge, a))
@@ -999,7 +1084,14 @@ def chain_strokes(strokes: list[Stroke], weld: float) -> list[Stroke]:
     out: list[Stroke] = []
 
     def walk(start_node):
-        """Hierholzer: returns the edge sequence of an Eulerian circuit from start."""
+        """Hierholzer: the Eulerian circuit from start, as (edge, from_node, to_node).
+
+        The direction matters. An earlier version returned bare edge ids and the caller
+        oriented each stroke by "whichever end is nearer the trail so far" -- which leaves
+        the FIRST edge of every trail in its stored direction. Stored backwards, the trail
+        starts from the wrong end, the next edge attaches to the nearer wrong point, and
+        the pen jumps and retraces. On the fox: 3 edges, 25 mm drawn twice.
+        """
         stack = [(start_node, None)]
         order = []
         while stack:
@@ -1014,7 +1106,7 @@ def chain_strokes(strokes: list[Stroke], weld: float) -> list[Stroke]:
                 used[ei] = True
                 stack.append((w, ei))
         order.reverse()
-        return [e for _n, e in order if e is not None]
+        return [(order[k][1], order[k - 1][0], order[k][0]) for k in range(1, len(order))]
 
     for comp in comps:
         starts = [n for n in comp if len(adj[n]) % 2 == 1] or comp
@@ -1026,23 +1118,20 @@ def chain_strokes(strokes: list[Stroke], weld: float) -> list[Stroke]:
             # sequence begins just after one. The walk is a CIRCUIT, so a dummy sitting
             # mid-sequence would split a single trail into two halves that actually join
             # end to end around the wrap. Rotating makes one dummy produce one cut.
-            cut = next((i for i, e in enumerate(edges) if e in dummy_of), None)
+            cut = next((i for i, (e, _a, _b) in enumerate(edges) if e in dummy_of), None)
             if cut is not None:
                 edges = edges[cut + 1:] + edges[:cut + 1]
             run: Stroke = []
-            for e in edges:
+            for e, frm, _to in edges:
                 if e in dummy_of:
                     if len(run) >= 2:
                         out.append(run)
                     run = []
                     continue
                 seg = list(live[e])
-                if not run:
-                    run = seg
-                else:
-                    if math.dist(run[-1], seg[0]) > math.dist(run[-1], seg[-1]):
-                        seg.reverse()
-                    run.extend(seg[1:])
+                if node(seg[0]) != frm:            # orient by the walk, never by distance
+                    seg.reverse()
+                run = seg if not run else run + seg[1:]
             if len(run) >= 2:
                 out.append(run)
     return out
@@ -1080,11 +1169,17 @@ def bridge(a_end: Stroke, b_start: Stroke, samples: int = 10) -> Stroke:
     return out
 
 
-def to_one_line(strokes: list[Stroke]) -> list[Stroke]:
+def to_one_line(strokes: list[Stroke], stats: dict | None = None) -> list[Stroke]:
     """Bridge every trail into a SINGLE continuous stroke, nearest end first."""
     live = [list(s) for s in strokes if len(s) >= 2]
+    if stats is not None:
+        stats["bridged_pieces"] = len(live)
     if len(live) <= 1:
         return live
+    allp = [p for s in live for p in s]
+    diag = math.dist((min(p[0] for p in allp), min(p[1] for p in allp)),
+                     (max(p[0] for p in allp), max(p[1] for p in allp))) or 1.0
+    longest = (0.0, (0.0, 0.0))
     cur = live.pop(0)
     while live:
         best, rev, bd = 0, False, float("inf")
@@ -1096,8 +1191,13 @@ def to_one_line(strokes: list[Stroke]) -> list[Stroke]:
         nxt = live.pop(best)
         if rev:
             nxt.reverse()
+        if bd > longest[0]:
+            longest = (bd, ((cur[-1][0] + nxt[0][0]) / 2, (cur[-1][1] + nxt[0][1]) / 2))
         cur.extend(bridge(cur, nxt))
         cur.extend(nxt)
+    if stats is not None:
+        stats["longest_bridge_frac"] = longest[0] / diag
+        stats["longest_bridge_at"] = longest[1]
     return [cur]
 
 
@@ -1109,19 +1209,242 @@ def plan_paths(strokes: list[Stroke], opts: dict) -> tuple[list[Stroke], dict]:
     """
     before = len(strokes)
     stats = {"strokes_in": before}
-    if opts.get("explode"):
-        strokes = explode(strokes)
     weld = float(opts.get("weld", 0.3))
+    if opts.get("explode"):
+        strokes = explode(strokes, weld)
     if opts.get("dedupe", True):
         strokes, dropped = dedupe_strokes(strokes, weld)
         stats["duplicates_dropped"] = dropped
     if opts.get("chain", True):
         strokes = chain_strokes(strokes, weld)
     if opts.get("one_line"):
-        strokes = to_one_line(strokes)
+        strokes = to_one_line(strokes, stats)
     stats["strokes_out"] = len(strokes)
     stats["lifts_saved"] = max(0, before - len(strokes))
     return strokes, stats
+
+
+
+# ---------------------------------------------------------------- the machine, simulated
+# A clean render is a promise the pen does not keep. Every drawing that disappointed on
+# paper looked fine on screen, so preview_* now shows what the arm will actually do, using
+# the faults that were measured rather than guessed:
+#   corner blending  the firmware keeps one command of lookahead and blends through
+#                    vertices, rounding corners by a roughly CONSTANT 1-2 mm
+#   radial tick      the lift axis is not vertical, so the nib travels along the line to
+#                    the shoulder as it touches down and lifts off: a short tick on that
+#                    radial line at every stroke end, longer the further the arm reaches
+# The tick model is an approximation: its AXIS (radial) and its growth with reach were
+# measured; its length is calibrated loosely and its sign along the axis was not pinned.
+BLEND_MM = float(os.environ.get("LINEUS_BLEND_MM", "1.5"))
+TICK_MM = float(os.environ.get("LINEUS_TICK_MM", "0.5"))     # at radius 1500 units
+
+
+def machine_to_canvas(x: float, y: float) -> tuple[float, float]:
+    """Inverse of to_machine, without rounding."""
+    a = (y - YMIN) / UNITS_PER_MM if SWAP else (x - XMIN) / UNITS_PER_MM
+    b = (x - XMIN) / UNITS_PER_MM if SWAP else (y - YMIN) / UNITS_PER_MM
+    return ((CANVAS_W - a) if FLIP_U else a, (CANVAS_H - b) if FLIP_V else b)
+
+
+def _radial(u: float, v: float) -> tuple[float, float, float]:
+    """Unit canvas vector pointing AWAY from the shoulder at (u, v), and the radius."""
+    a = (CANVAS_W - u) if FLIP_U else u
+    b = (CANVAS_H - v) if FLIP_V else v
+    x = XMIN + (b if SWAP else a) * UNITS_PER_MM
+    y = YMIN + (a if SWAP else b) * UNITS_PER_MM
+    r = math.hypot(x, y) or 1.0
+    u1, v1 = machine_to_canvas(x, y)
+    u2, v2 = machine_to_canvas(x + 20 * x / r, y + 20 * y / r)
+    du, dv = u2 - u1, v2 - v1
+    n = math.hypot(du, dv) or 1.0
+    return du / n, dv / n, r
+
+
+def _blend(s: Stroke, win: float = BLEND_MM, step: float = 0.15) -> Stroke:
+    """Moving average along arc length, ENDPOINTS PINNED. A naive average shortens every
+    stroke at both ends -- the machine does not: the pen reaches the commanded end before
+    the lift. So the window shrinks symmetrically toward each end instead of truncating."""
+    r = [s[0]]
+    for a, b in zip(s, s[1:]):
+        d = math.dist(a, b)
+        if d < 1e-9:
+            continue
+        n = max(1, int(d / step))
+        for k in range(1, n + 1):
+            r.append((a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n))
+    if len(r) < 3:
+        return r
+    w = max(1, int(win / step) // 2)
+    out = []
+    for i in range(len(r)):
+        k = min(w, i, len(r) - 1 - i)
+        seg = r[i - k:i + k + 1]
+        out.append((sum(p[0] for p in seg) / len(seg), sum(p[1] for p in seg) / len(seg)))
+    return out
+
+
+def simulate_strokes(strokes: list[Stroke]) -> list[Stroke]:
+    """What the paper gets: blended corners plus a radial tick at both ends of each stroke."""
+    out = []
+    for s in order_human(strokes):
+        if len(s) < 2:
+            out.append(s)
+            continue
+        b = _blend(s)
+        for end in (0, -1):
+            du, dv, r = _radial(*b[end])
+            t = TICK_MM * r / 1500.0
+            tip = (b[end][0] + du * t, b[end][1] + dv * t)
+            b = [tip] + b if end == 0 else b + [tip]
+        out.append(b)
+    return out
+
+
+# ---------------------------------------------------------------- drawing checks
+# Each of these is a mistake actually made while iterating drawings for this machine,
+# turned into something that fires BEFORE the paper. They report WHERE, because every
+# fix was made at a specific spot. What they cannot catch is bad drawing: proportion,
+# silhouette, character. That knowledge lives in the server instructions instead.
+MERGE_MM = 1.1      # measured: two passes closer than ~1.15 mm fuse into one blot
+TOUCH_MM = 0.15     # closer than this the two passes are ON TOP of each other
+MERGE_RUN_MM = 3.0  # length they must run close before it is a blot. 3 mm, not 2: two
+                    # edges meeting at angle a stay within MERGE_MM for ~1/sin(a) mm, so
+                    # 3 mm flags slivers under ~18 deg and spares the 20-30 deg corners
+                    # that low-poly art is made of
+DUP_RUN_MM = 2.0    # length two passes must OVERLAP to be a duplicate. Measured as a run,
+                    # not per segment: a crossing puts tiny segments in the same cells too
+SAME_ARC_MM = 3.0   # along one stroke, neighbours nearer than this in arc are just the line
+
+
+def _point_in_poly(p, poly) -> bool:
+    x, y = p
+    inside = False
+    for (x1, y1), (x2, y2) in zip(poly, poly[1:] + poly[:1]):
+        if (y1 > y) != (y2 > y) and x < (x2 - x1) * (y - y1) / ((y2 - y1) or 1e-12) + x1:
+            inside = not inside
+    return inside
+
+
+def _dist_to_poly(p, poly) -> float:
+    best = float("inf")
+    for a, b in zip(poly, poly[1:] + poly[:1]):
+        ax, ay = a; bx, by = b
+        dx, dy = bx - ax, by - ay
+        L = dx * dx + dy * dy
+        t = 0.0 if L < 1e-12 else max(0.0, min(1.0, ((p[0] - ax) * dx + (p[1] - ay) * dy) / L))
+        best = min(best, math.dist(p, (ax + t * dx, ay + t * dy)))
+    return best
+
+
+def _proximity(strokes: list[Stroke], fills: list[Stroke]) -> tuple[list, list]:
+    """Where two passes of the pen run alongside each other.
+
+    Returns (overlaps, merges), each a list of (u, v, closest_mm, run_mm), one per place:
+      overlaps  passes ON TOP of each other for >= DUP_RUN_MM: something drawn twice
+      merges    passes within MERGE_MM without touching for >= MERGE_RUN_MM: a blot
+    Both are measured as RUNS along the line. A crossing brings two passes together too,
+    but only briefly, which is exactly what separates it from either fault.
+    """
+    pts = []                                    # (u, v, stroke, arc)
+    for sid, s in enumerate(strokes):
+        arc = 0.0
+        for a, b in zip(s, s[1:]):
+            d = math.dist(a, b)
+            if d < 1e-9:
+                continue
+            n = max(1, int(d / 0.25))
+            for k in range(n):
+                t = k / n
+                pts.append((a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, sid, arc + d * t))
+            arc += d
+        if len(s) >= 2:
+            pts.append((s[-1][0], s[-1][1], sid, arc))
+    if not pts:
+        return [], []
+    boxes = []
+    for f in fills:
+        xs = [q[0] for q in f]; ys = [q[1] for q in f]
+        boxes.append((min(xs) - 0.6, min(ys) - 0.6, max(xs) + 0.6, max(ys) + 0.6, f))
+
+    def in_fill(p):
+        for x0, y0, x1, y1, f in boxes:
+            if x0 <= p[0] <= x1 and y0 <= p[1] <= y1:
+                if _point_in_poly(p, f) or _dist_to_poly(p, f) < 0.6:
+                    return True
+        return False
+
+    cell = MERGE_MM
+    grid: dict = {}
+    for i, (u, v, _s, _a) in enumerate(pts):
+        grid.setdefault((int(u // cell), int(v // cell)), []).append(i)
+    near = [float("inf")] * len(pts)
+    for i, (u, v, sid, arc) in enumerate(pts):
+        cx, cy = int(u // cell), int(v // cell)
+        best = float("inf")
+        for gx in (cx - 1, cx, cx + 1):
+            for gy in (cy - 1, cy, cy + 1):
+                for j in grid.get((gx, gy), ()):
+                    uj, vj, sj, aj = pts[j]
+                    if sj == sid and abs(aj - arc) <= SAME_ARC_MM:
+                        continue
+                    d = math.hypot(uj - u, vj - v)
+                    if d < best:
+                        best = d
+        near[i] = best
+    fill_mask = [in_fill((u, v)) for u, v, _s, _a in pts]
+
+    def runs(pred, min_len):
+        found, i = [], 0
+        while i < len(pts):
+            if not pred(i):
+                i += 1
+                continue
+            j = i
+            while j + 1 < len(pts) and pts[j + 1][2] == pts[i][2] and pred(j + 1):
+                j += 1
+            length = pts[j][3] - pts[i][3]
+            if length >= min_len:
+                m = (i + j) // 2
+                found.append((pts[m][0], pts[m][1], min(near[i:j + 1]), length))
+            i = j + 1
+        clusters = []                           # one report per place, not per pass
+        for f in sorted(found, key=lambda q: -q[3]):
+            if all(math.dist(f[:2], c[:2]) > 3.0 for c in clusters):
+                clusters.append(f)
+        return clusters
+
+    overlaps = runs(lambda i: near[i] <= TOUCH_MM and not fill_mask[i], DUP_RUN_MM)
+    merges = runs(lambda i: TOUCH_MM < near[i] < MERGE_MM and not fill_mask[i], MERGE_RUN_MM)
+    return overlaps, merges
+
+
+def lint_scene(final: list[Stroke], meta: dict) -> list[str]:
+    """Drawing-quality warnings, each with a location in page millimetres."""
+    out = []
+    overlaps, merges = _proximity(final, meta.get("fills", []))
+    if overlaps:
+        where = ", ".join(f"({u:.0f},{v:.0f})" for u, v, _d, _l in overlaps[:3])
+        out.append(f"{len(overlaps)} place(s) where the pen goes over the SAME line twice "
+                   f"(e.g. {where}). The second pass lands slightly off the first, so the "
+                   f"edge reads as doubled. If this is a mesh, add \"join\": "
+                   f"{{\"explode\": true, \"dedupe\": true}}.")
+    for u, v, d, length in merges[:5]:
+        out.append(f"two lines stay within {MERGE_MM} mm of each other for {length:.0f} mm "
+                   f"at ({u:.0f},{v:.0f}), {d:.1f} mm at the closest -- closer than ~1.15 mm "
+                   f"they fuse into a blot. Spread them or widen the angle where they meet; "
+                   f"a small closed shape like an eye needs >= 2.5 mm across.")
+    if len(merges) > 5:
+        out.append(f"...and {len(merges) - 5} more places like that.")
+    jb = meta.get("join_stats", {})
+    if jb.get("bridged_pieces", 0) >= 3 or jb.get("longest_bridge_frac", 0) > 0.2:
+        u, v = jb.get("longest_bridge_at", (0, 0))
+        out.append(f"one_line glued {jb.get('bridged_pieces')} separate pieces together; the "
+                   f"longest bridge (at ({u:.0f},{v:.0f})) spans "
+                   f"{100 * jb.get('longest_bridge_frac', 0):.0f}% of the drawing. Bridges "
+                   f"between unrelated pieces read as glue. For one-line art, design ONE "
+                   f"path with smooth control points that travels through the figure.")
+    return out
 
 
 # ---------------------------------------------------------------- scene compiler
@@ -1196,11 +1519,22 @@ def _produce_one(shape: dict, i: int, n: int) -> list[Stroke]:
                     f"got keys {sorted(shape)}")
 
 
-def compile_scene(scene: dict) -> list[Stroke]:
-    """Compile a declarative scene to strokes. Deterministic: same scene, same strokes."""
+def compile_scene_full(scene: dict) -> tuple[list[Stroke], dict]:
+    """Compile a scene to strokes, plus what the drawing checks need to know.
+
+    Deterministic: same scene, same strokes. Fill outlines are carried through the same
+    transforms as the drawing so the checks can tell an intended solid fill from an
+    accidental blot.
+
+    The scene-level fit runs BEFORE join, not after. join's weld tolerance is in
+    millimetres, so it has to see millimetre coordinates; a scene authored on a 0..100
+    grid and fitted afterwards was welding in grid units.
+    """
     if not isinstance(scene, dict) or "shapes" not in scene:
         raise ExprError('scene must be {"shapes": [...]}')
     out: list[Stroke] = []
+    hatch: list[Stroke] = []       # fill lines: already optimally joined, never re-planned
+    fills: list[Stroke] = []
     for idx, shape in enumerate(scene["shapes"]):
         if not isinstance(shape, dict):
             raise ExprError(f"shape {idx} is not an object")
@@ -1212,6 +1546,8 @@ def compile_scene(scene: dict) -> list[Stroke]:
                 ss = _produce_one(shape, i, reps)
             except ExprError as e:
                 raise ExprError(f"shape {idx}: {e}") from None
+            fpolys: list[Stroke] = []
+            hh: list[Stroke] = []
             fill = shape.get("fill")
             if fill:
                 sp = float(fill.get("spacing", 1.15))
@@ -1221,20 +1557,35 @@ def compile_scene(scene: dict) -> list[Stroke]:
                     hatched += hatch_polygon(s, ang, sp)
                     if fill.get("cross"):
                         hatched += hatch_polygon(s, ang + 90.0, sp)
-                ss = (ss if fill.get("outline", True) else []) + hatched
+                fpolys = [list(s) for s in ss if len(s) >= 3]
+                hh = hatched
+                ss = ss if fill.get("outline", True) else []
             if shape.get("transform"):
-                ss = _transform(ss, shape["transform"])
+                tr = shape["transform"]
+                ss, hh, fpolys = _transform(ss, tr), _transform(hh, tr), _transform(fpolys, tr)
             if shape.get("box") or shape.get("fit"):
                 b = shape.get("box") or shape.get("fit")
-                ss = fit(ss, float(b[0]), float(b[1]), float(b[2]), float(b[3]))
+                prm = fit_params(ss + hh, float(b[0]), float(b[1]), float(b[2]), float(b[3]))
+                ss, hh, fpolys = apply_fit(ss, prm), apply_fit(hh, prm), apply_fit(fpolys, prm)
             out += ss
-    join = scene.get("join")
-    if join:
-        out, _ = plan_paths(out, join if isinstance(join, dict) else {})
+            hatch += hh
+            fills += fpolys
     if scene.get("fit"):
         b = scene["fit"]
-        out = fit(out, float(b[0]), float(b[1]), float(b[2]), float(b[3]))
-    return [s for s in out if len(s) >= 1]
+        prm = fit_params(out + hatch, float(b[0]), float(b[1]), float(b[2]), float(b[3]))
+        out, hatch, fills = apply_fit(out, prm), apply_fit(hatch, prm), apply_fit(fills, prm)
+    meta: dict = {"fills": fills}
+    join = scene.get("join")
+    if join:
+        opts = join if isinstance(join, dict) else {}
+        out, st = plan_paths(out, opts)
+        meta["join_stats"] = st
+    return [s for s in out + hatch if len(s) >= 1], meta
+
+
+def compile_scene(scene: dict) -> list[Stroke]:
+    """Compile a declarative scene to strokes. Deterministic: same scene, same strokes."""
+    return compile_scene_full(scene)[0]
 
 
 def scene_digest(scene: dict) -> str:
@@ -1244,16 +1595,22 @@ def scene_digest(scene: dict) -> str:
     return hashlib.sha1(blob.encode()).hexdigest()[:12]
 
 
-_scene_cache: dict[str, list[Stroke]] = {}
+_scene_cache: dict[str, tuple[list[Stroke], dict]] = {}
 
 
-def compile_cached(scene: dict) -> tuple[str, list[Stroke]]:
+def compile_cached_full(scene: dict) -> tuple[str, list[Stroke], dict]:
     sid = scene_digest(scene)
     if sid not in _scene_cache:
         if len(_scene_cache) > 64:
             _scene_cache.clear()
-        _scene_cache[sid] = compile_scene(scene)
-    return sid, _scene_cache[sid]
+        _scene_cache[sid] = compile_scene_full(scene)
+    strokes, meta = _scene_cache[sid]
+    return sid, strokes, meta
+
+
+def compile_cached(scene: dict) -> tuple[str, list[Stroke]]:
+    sid, strokes, _meta = compile_cached_full(scene)
+    return sid, strokes
 
 # ---------------------------------------------------------------- jobs
 @dataclass
@@ -1357,7 +1714,32 @@ mcp = FastMCP("lineus", instructions=(
     f"{SMALL_FEATURE_MM:.0f} mm lose their corners; draw_* takes speed=1..30 "
     f"(default {DEFAULT_SPEED}, lower is slower and sharper) and order=fast|human|asis "
     "(human is the DEFAULT: reading order, looks like a person drawing; "
-    "fast = nearest-neighbour, least travel but hops around; asis = as supplied)."))
+    "fast = nearest-neighbour, least travel but hops around; asis = as supplied).\n\n"
+    "DRAWING WELL ON THIS MACHINE -- learned on paper, mostly by getting it wrong:\n"
+    "- Prefer preview_scene/draw_scene over raw paths: curves are expressions, figures are "
+    "smooth control points, and preview and draw are guaranteed to match.\n"
+    "- Judge a drawing by the SIMULATED preview image, never the clean one. Every drawing "
+    "that disappointed on paper looked fine as a clean render. Read the DRAWING CHECKS in "
+    "the preview note: each names a location to fix.\n"
+    "- Nothing under ~2 mm survives: the arm rounds every corner by 1-2 mm. Small closed "
+    "shapes such as eyes need at least 2.5 mm in their narrowest dimension.\n"
+    "- Lines closer than ~1.15 mm fuse into a blot. Avoid that everywhere except where you "
+    "want solid black: there use fill with spacing ~0.45. Fill eyes and noses solid -- "
+    "outlined eyes vanish among other lines.\n"
+    "- Every pen lift leaves a small radial tick, so prefer long continuous strokes.\n"
+    "- One-line art is ONE designed path through the figure (smooth control points, the "
+    "line crossing itself to make the features). Do not draw separate pieces and glue "
+    "them with join.one_line: the bridges read as glue.\n"
+    "- Low-poly / geometric art is a mesh: use \"join\": {\"explode\": true, "
+    "\"dedupe\": true}, or every shared edge is drawn twice and looks doubled.\n"
+    "- Recognisability is silhouette and proportion, not detail. A fox is a hard taper "
+    "from cheek ruffs to a long narrow snout; a cat reads from slanted almond eyes and a "
+    "pear-shaped body with a short neck; tilting a head about the neck adds character. "
+    "Draft, preview, critique against the reference, fix -- expect several rounds.\n"
+    "- Start from a worked example rather than from nothing: get_example() lists them, "
+    "get_example('one_line_cat') returns a scene to modify.\n"
+    "- Text: list_fonts(). Use the handwriting faces; pick by aperture, and keep lines "
+    "short -- the page width, not the box height, sets the letter size."))
 
 @mcp.tool()
 def get_status() -> dict:
@@ -1382,11 +1764,12 @@ def _paths_to_strokes(paths: list[list[list[float]]]) -> list[Stroke]:
     return [[(float(p[0]), float(p[1])) for p in path] for path in paths if path]
 
 @mcp.tool()
-def preview_paths(paths: list[list[list[float]]]) -> list:
-    """Render polylines (canvas mm, [[ [u,v], ... ], ...]) as a PNG without drawing.
-    Black = pen down, pink = pen-up travel, grey box = canvas edge."""
+def preview_paths(paths: list[list[list[float]]], simulate: bool = True) -> list:
+    """Render polylines (canvas mm, [[ [u,v], ... ], ...]) without drawing.
+    Returns the diagnostic view (pink = pen-up travel, grey box = page) and, with
+    simulate=true (default), what the arm will actually put on paper."""
     s = order_human([simplify(x) for x in _paths_to_strokes(paths)])
-    return [Image(data=render_png(s), format="png"), write_preview(s)]
+    return _preview_result(s, simulate)
 
 @mcp.tool()
 def draw_paths(paths: list[list[list[float]]], speed: int | None = None,
@@ -1412,11 +1795,12 @@ def _svg_fit(svg: str, x: float | None, y: float | None, w: float | None, h: flo
 
 @mcp.tool()
 def preview_svg(svg: str, x: float | None = None, y: float | None = None,
-                w: float | None = None, h: float | None = None) -> Image:
+                w: float | None = None, h: float | None = None,
+                simulate: bool = True) -> list:
     """Render an SVG (paths/shapes, strokes only — fills are ignored) fitted into
     the box (x,y,w,h) in canvas mm (default: whole canvas). Returns a PNG."""
     s = order_human(_svg_fit(svg, x, y, w, h))
-    return [Image(data=render_png(s), format="png"), write_preview(s)]
+    return _preview_result(s, simulate)
 
 @mcp.tool()
 def draw_svg(svg: str, x: float | None = None, y: float | None = None,
@@ -1436,14 +1820,14 @@ def _text_fit(text, x, y, w, h, font):
 @mcp.tool()
 def preview_text(text: str, x: float | None = None, y: float | None = None,
                  w: float | None = None, h: float | None = None,
-                 font: str = "futural") -> list:
+                 font: str = "futural", simulate: bool = True) -> list:
     """Render single-stroke (Hershey) text fitted into box (x,y,w,h) mm. Use \\n for
     new lines. Prefer the HANDWRITING faces -- print: neutral architect pancakes delight
     casual; cursive (welded, one stroke per word): italienne cursive2 brush allure.
     call list_fonts() for the measurements. Hershey names still work but most of them
     retrace every stem."""
     s = order_human(_text_fit(text, x, y, w, h, font))
-    return [Image(data=render_png(s), format="png"), write_preview(s)]
+    return _preview_result(s, simulate)
 
 @mcp.tool()
 def draw_text(text: str, x: float | None = None, y: float | None = None,
@@ -1458,7 +1842,7 @@ def draw_text(text: str, x: float | None = None, y: float | None = None,
     return submit(_text_fit(text, x, y, w, h, font), speed, order)
 
 @mcp.tool()
-def preview_scene(scene: dict) -> list:
+def preview_scene(scene: dict, simulate: bool = True) -> list:
     """Render a declarative SCENE as a PNG without drawing. Prefer this over
     preview_paths: a scene is ~50x smaller than the coordinates it compiles to, and
     draw_scene given the SAME scene provably draws what you previewed.
@@ -1491,11 +1875,10 @@ def preview_scene(scene: dict) -> list:
       "box"/"fit" [x,y,w,h]  scale this shape into a box
       "repeat"    N, with i (0..N-1) and n available in the expressions"""
     try:
-        _, strokes = compile_cached(scene)
+        _, strokes, meta = compile_cached_full(scene)
     except ExprError as e:
         return [f"scene error: {e}"]
-    s = order_human(strokes)
-    return [Image(data=render_png(s), format="png"), write_preview(s)]
+    return _preview_result(order_human(strokes), simulate, lint_scene(strokes, meta))
 
 @mcp.tool()
 def draw_scene(scene: dict, speed: int | None = None, order: str = "human") -> dict:
@@ -1503,11 +1886,13 @@ def draw_scene(scene: dict, speed: int | None = None, order: str = "human") -> d
     language). Compilation is deterministic and content-hashed, so passing the scene you
     previewed draws exactly what you saw. Returns a job_id and the scene_id."""
     try:
-        sid, strokes = compile_cached(scene)
+        sid, strokes, meta = compile_cached_full(scene)
     except ExprError as e:
         return {"error": str(e)}
     r = submit(strokes, speed, order)
     r["scene_id"] = sid
+    if "warnings" in r:
+        r["warnings"] = r["warnings"] + lint_scene(strokes, meta)
     return r
 
 @mcp.tool()
@@ -1515,7 +1900,7 @@ def plan_scene(scene: dict) -> dict:
     """Compile a scene and report what it would cost, WITHOUT drawing or rendering:
     stroke/point counts, bounding box, pen-up travel and any warnings."""
     try:
-        sid, strokes = compile_cached(scene)
+        sid, strokes, meta = compile_cached_full(scene)
     except ExprError as e:
         return {"error": str(e)}
     pts = [p for s in strokes for p in s]
@@ -1527,7 +1912,7 @@ def plan_scene(scene: dict) -> dict:
                         round(max(p[0] for p in pts), 2), round(max(p[1] for p in pts), 2)],
             "pen_up_travel_mm": round(travel_mm(order_human(strokes))),
             "warnings": (envelope_check(strokes) + small_feature_check(strokes, speed)
-                         + clearance_check(strokes))}
+                         + clearance_check(strokes) + lint_scene(strokes, meta))}
 
 @mcp.tool()
 def list_fonts(include_hershey: bool = False) -> dict:
@@ -1617,6 +2002,54 @@ def list_fonts(include_hershey: bool = False) -> dict:
                     "retrace.",
         }
     return out
+
+
+EXAMPLES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "examples")
+
+
+def _example_names() -> list[str]:
+    try:
+        return sorted(f[:-5] for f in os.listdir(EXAMPLES_DIR) if f.endswith(".json"))
+    except OSError:
+        return []
+
+
+def _example_index() -> list[dict]:
+    rows = []
+    for n in _example_names():
+        try:
+            sc = json.load(open(os.path.join(EXAMPLES_DIR, n + ".json"), encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        rows.append({"name": n, "about": sc.get("_comment", "")[:300]})
+    return rows
+
+
+@mcp.resource("lineus://examples")
+def examples_resource() -> str:
+    """Index of worked example scenes -- finished drawings to start from."""
+    return json.dumps(_example_index(), indent=1)
+
+
+@mcp.resource("lineus://examples/{name}")
+def example_resource(name: str) -> str:
+    """One worked example scene, ready for preview_scene / draw_scene."""
+    if name not in _example_names():
+        raise ValueError(f"no example {name!r}; have {_example_names()}")
+    return open(os.path.join(EXAMPLES_DIR, name + ".json"), encoding="utf-8").read()
+
+
+@mcp.tool()
+def get_example(name: str = "") -> dict:
+    """Worked example scenes: finished drawings that went through several rounds of
+    critique on this machine. With no name, lists them. With a name, returns the scene --
+    pass it to preview_scene as-is, or modify it ("the cat, lying down") rather than
+    starting from nothing. Each carries a _comment explaining what made it work."""
+    if not name:
+        return {"examples": _example_index()}
+    if name not in _example_names():
+        return {"error": f"no example {name!r}", "examples": _example_names()}
+    return json.load(open(os.path.join(EXAMPLES_DIR, name + ".json"), encoding="utf-8"))
 
 
 @mcp.tool()

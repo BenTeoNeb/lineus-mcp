@@ -103,9 +103,9 @@ A scene-level `"join"` block rewrites the whole pile of strokes before drawing:
 | `weld` | how close two ends must be to count as touching, in mm |
 
 This matters more than it sounds. A triangle mesh supplied as triangles **redraws every
-interior edge twice**: on the bundled fox, 575 mm of ink against 361 mm planned, and the
-repeat lands slightly off the original so the edge reads as doubled. Planned, it also
-drops from 22 strokes to 7 — and every pen lift costs a landing smear, so fewer lifts is
+interior edge twice**: on the bundled fox, 1,155 mm of ink against 680 mm planned — 41%
+of the drawing — and the repeat lands slightly off the original so the edge reads as
+doubled. Planned, it also drops from 50 strokes to 9 — and every pen lift costs a landing smear, so fewer lifts is
 a quality setting here, not just a faster one.
 
 `chain` is Hierholzer with odd-vertex pairing, not greedy extension. Greedy looks fine and
@@ -280,8 +280,11 @@ Scenes in [`examples/`](examples/), ready to pass straight to `preview_scene`:
 - `scene_demo.json` — text, a hatched blob, a harmonograph and a repeat family.
   473 characters of geometry compiling to 1,836 points (the file is longer; it is
   commented)
-- `geometric_fox.json` — a low-poly head as a triangle mesh, showing what `join` does to
-  one: 22 strokes and 575 mm of ink become 7 strokes and 361 mm
+- `one_line_cat.json` — a sitting cat in a single continuous line. One *designed* path,
+  not an outline with details bridged on: bridging separate pieces reads as glue
+- `geometric_fox.json` — a low-poly fox head, 48 designed triangles with solid-filled eyes
+  and nose. Its mesh is 50 strokes and 1,155 mm of ink naively, 9 strokes and 680 mm
+  planned
 - `text_oneliners.json` — one-liners, with a note on why the page width sets your cap
   height rather than the box you ask for
 

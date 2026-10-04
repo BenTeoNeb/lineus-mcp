@@ -18,16 +18,91 @@ you      ──▶  Claude  ──▶  lineus-mcp  ──▶  TCP 1337  ──�
 
 | Tool | Purpose |
 |---|---|
-| `get_status` | Firmware banner, diagnostics, page size, reachable envelope, last job |
+| `preview_scene` / `draw_scene` | **The main interface.** A declarative scene, compiled to strokes server-side |
+| `plan_scene` | Stroke/point counts, bounding box, travel and warnings — without drawing or rendering |
+| `list_fonts` | The handwriting faces, with the measurements that say which will survive |
 | `preview_paths` / `preview_svg` / `preview_text` | Render a PNG of what *would* be drawn — no movement |
-| `draw_paths` | Polylines in millimetres: `[[[u,v], [u,v], ...], ...]` |
+| `draw_paths` | Polylines in millimetres: `[[[u,v], [u,v], ...], ...]` — the escape hatch |
 | `draw_svg` | SVG line art fitted into a box (strokes only; fills are not hatched) |
-| `draw_text` | Single-stroke [Hershey](https://en.wikipedia.org/wiki/Hershey_fonts) text |
+| `draw_text` | A single line or block of single-stroke text |
+| `get_status` | Firmware banner, diagnostics, page size, reachable envelope, last job |
 | `get_job` / `abort` / `home` | Async job control |
 | `draw_orientation_test` | Frame + an "F" to verify the canvas orientation |
 
 Drawing is asynchronous: `draw_*` returns a `job_id`, and you poll `get_job`.
 Only one drawing runs at a time.
+
+Every `preview_*` also writes **`_preview.png`** next to the server — an ink-only render at
+true nib width, so you can watch your own iterations in any image viewer that reloads on
+change. That is a different picture from the one the agent gets, which adds the envelope,
+the page and the pen-up travel. The ink view is the one that catches a curve whose loops
+are closer together than the nib is wide: it looks like a lovely wire figure at two pixels
+per line and comes out as a solid black lozenge at 0.5 mm.
+
+## Scenes
+
+Sending coordinates is expensive and fragile — a page of generated curves is tens of
+thousands of characters, and preview and draw are two separate pastes that can silently
+disagree. A **scene** is a description that the server compiles:
+
+```json
+{"shapes": [
+  {"text": "Slow is smooth", "font": "neutral", "align": "center", "box": [4, 2, 72, 10]},
+  {"param": {"t": [0, 47, 900],
+             "x": "40+33*exp(-0.028*t)*sin(2.01*t)",
+             "y": "30+10*exp(-0.028*t)*sin(3.02*t+1.2)"}},
+  {"param": {"t": [0, 6.2832, 160], "x": "55+8*cos(t)", "y": "11+8*sin(t)", "closed": true},
+   "fill": {"hatch": 45, "spacing": 1.15}}
+]}
+```
+
+That harmonograph is 125 characters where its 2,000 points would be 27,542 — about 220×.
+
+**There is deliberately no library of shapes.** A fixed vocabulary of circle/rect/arc would
+handle the dull cases and send everything interesting straight back to pasting
+coordinates, which is the problem scenes exist to solve. Curves are **expressions**, so a
+circle, a spiral, a rose and a harmonograph are the same producer with different formulae.
+Expressions are evaluated by a whitelisted AST walk — no imports, no attribute access, no
+`exec` — so the open-endedness costs no safety.
+
+| producer | |
+|---|---|
+| `param` | `{"t": [start, stop, steps], "x": expr, "y": expr, "closed": bool}` |
+| `text` | a string, or a list of `{"s", "font"}` for multi-font blocks |
+| `path` / `paths` | raw points, the escape hatch |
+| `svg` | imported line art |
+
+| modifier | |
+|---|---|
+| `fill` | `{"hatch": deg, "spacing": mm, "cross": bool}` — how you get solid black here |
+| `transform` | `translate`, `rotate`, `scale`, `about` |
+| `box` / `fit` | scale this shape into `[x, y, w, h]` |
+| `repeat` | N, exposing `i` and `n` to the expressions |
+
+Variables are `t`, plus `i` and `n` inside a `repeat`. Functions: `sin cos tan asin acos
+atan atan2 sinh cosh tanh exp log sqrt hypot floor ceil fmod degrees radians abs min max
+round pow sign clamp lerp`, and `pi tau e`.
+
+**No scene id is ever issued.** Pass the same scene to `draw_scene` that you passed to
+`preview_scene`: compilation is deterministic and content-hashed, so the two agree by
+construction, and there is no id to go stale.
+
+## Handwriting
+
+Bundled in [`fonts/`](fonts/) are nine **single-line** faces under the SIL Open Font
+License — real handwriting typefaces, not engraving fonts — with attribution in
+[`fonts/NOTICE.md`](fonts/NOTICE.md).
+
+| | faces |
+|---|---|
+| print | `neutral` `architect` `pancakes` `delight` `casual` |
+| cursive | `italienne` `cursive2` `brush` `allure` |
+
+The cursive faces **weld**: a letter's exit sits close enough to the next letter's entry
+that they join into one continuous stroke per word. "minimum" is 4 strokes, not 7 lifts.
+
+The classic [Hershey](https://en.wikipedia.org/wiki/Hershey_fonts) names still work, but
+most of them are a bad idea on a plotter — see below.
 
 ## Coordinates
 
@@ -39,8 +114,13 @@ The real limit is the measured **envelope**: a circular segment of outer radius
 1850 units (~92 mm) cut off by a straight inner chord, roughly three times the page area.
 
 Points outside the envelope are reported as warnings, never silently moved. This matters:
-the firmware clamps out-of-reach targets *radially* toward the origin, which would distort
-a drawing without any error.
+the firmware clamps out-of-reach targets *radially* toward the origin **and lifts the pen**,
+so an out-of-range point does not merely distort a stroke, it breaks it.
+
+Note that the "app drawing area" the official documentation gives — x 650…1775,
+y −1000…1000 — is **not** all reachable. Its far corners sit at radius 2037 against the
+1950 this arm actually manages, so a drawing that fills that rectangle quietly loses its
+corners. Other projects hardcode it. The envelope here was measured over 45 probes instead.
 
 ## Install
 
@@ -87,6 +167,11 @@ Dependencies are declared inline ([PEP 723](https://peps.python.org/pep-0723/)),
 | `LINEUS_SPEED` | `5` | Default `G94` speed, 2 (slow, sharp) … 30 (fast, rounded) |
 | `LINEUS_MIN_SPEED` | `2` | Floor. **Speed 1 can wedge the firmware** — see below |
 | `LINEUS_TIMEOUT` | `180` | Socket timeout in seconds |
+| `LINEUS_TRAVEL_SPEED` | `30` | `G94 P`, pen-*up* step size. Proven not to affect mark quality, so it is pure throughput |
+| `LINEUS_PEN_DOWN_Z` | `300` | How far down the pen goes. Not 0 — see the landing smear below |
+| `LINEUS_PREVIEW` | `./_preview.png` | Where the ink preview is written |
+| `LINEUS_NIB_MM` | `0.5` | Nib width for that preview. Set it when you change pens |
+| `LINEUS_JOIN_EM` | `0.13` | How close a cursive letter's exit must be to the next letter's entry to weld |
 | `LINEUS_SWAP` / `LINEUS_FLIP_U` / `LINEUS_FLIP_V` | `1`/`0`/`0` | Orientation fixes |
 | `LINEUS_R_MAX` / `LINEUS_R_MIN` / `LINEUS_X_MIN` | `1850`/`650`/`650` | Envelope limits |
 
@@ -114,6 +199,19 @@ pointing at the same place and growing with distance from it. Timing has nothing
 it — at constant radius, speed changes nothing, and the fix is a shallower pen-down `Z`
 (the server uses 300, not 0), not a pause. Any amount of waiting is wasted effort here.
 
+**Most engraving fonts retrace every stem, and it shows.** Hershey's bold and serif faces
+fake weight by drawing each stem two or three times side by side — a capital `H` in
+`rowmant` is **27 strokes**, against the 3 a person uses. On a plotter that reads as a
+sketchy scribble rather than writing. `futural` is the only Hershey face that does not do
+it. The bundled single-line faces all draw a letter about once.
+
+**Pick a face by its aperture, not by how it looks on screen.** The measurement that
+predicts legibility here is the width of the opening in a letter — the gap in `s`, `a`,
+`e`, `o` — against the 1–2 mm that corner blending eats. `brush` has a 0.89 mm aperture
+at a 5 mm cap height, and turns "oo" into something like "rr" on paper. `architect` has
+2.74 mm and stays crisp. `list_fonts` reports this per face. Two faces chosen from clean
+renders both lost to the ones aperture favoured, so trust the number over the preview.
+
 **Line art beats dot art, by a lot.** The same ladybug: 358 dots took 154 s and every mark
 smeared. 17 polylines took 33 s and came out clean. For solid blacks, hatch at ~1.15 mm —
 do not pack dots.
@@ -137,8 +235,15 @@ and only a power cycle recovers it. The server floors speed at 2 for this reason
 
 ## Examples
 
-Standalone generator scripts in [`examples/`](examples/) — each prints a stroke list you
-can hand to `draw_paths`:
+Scenes in [`examples/`](examples/), ready to pass straight to `preview_scene`:
+
+- `scene_demo.json` — text, a hatched blob, a harmonograph and a repeat family.
+  473 characters of geometry compiling to 1,836 points (the file is longer; it is
+  commented)
+- `text_oneliners.json` — one-liners, with a note on why the page width sets your cap
+  height rather than the box you ask for
+
+Standalone generator scripts, each printing a stroke list you can hand to `draw_paths`:
 
 - `harmonograph.py` — damped Lissajous figure, one unbroken stroke. The machine's best case.
 - `stipple.py` — tonal stippling by variable-radius Poisson sampling

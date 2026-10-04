@@ -27,6 +27,6 @@ stipple*.json
 
 # Working notes for the coding agent. Deliberately NOT in the repo: they are a lab
 # notebook, full of dead ends, machine-specific calibration and dated session state.
-# Anything a user of this project needs is in README.md or DESIGN.md.
+# Anything a user of this project needs is in README.md.
 CLAUDE.md
 .claude/

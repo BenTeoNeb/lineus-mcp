@@ -1,0 +1,24 @@
+{
+  "_comment": "Demo scene for preview_scene/draw_scene. 473 characters here compile to 1836 points (53x). Note there is no circle, blob or harmonograph primitive: every curve is an expression, which is why the vocabulary is open.",
+  "shapes": [
+    {"text": [{"s": "Line-us", "font": "timesr"}, {"s": "scenes", "font": "scriptc"}],
+     "align": "center", "box": [3, 2.5, 30, 13]},
+
+    {"_": "a lobed blob, hatched solid at the measured 1.15 mm spacing",
+     "param": {"t": [0, 6.2832, 160],
+               "x": "55+8*cos(t)+2*cos(5*t)", "y": "11+8*sin(t)+2*sin(5*t)",
+               "closed": true},
+     "fill": {"hatch": 45, "spacing": 1.15}},
+
+    {"_": "damped harmonograph; decay tuned so loops stay above the 0.5 mm nib",
+     "param": {"t": [0, 47, 900],
+               "x": "40+33*exp(-0.028*t)*sin(2.01*t)",
+               "y": "30+10*exp(-0.028*t)*sin(3.02*t+1.2)"}},
+
+    {"_": "a family driven by the repeat index i",
+     "repeat": 8,
+     "param": {"t": [0, 6.2832, 60],
+               "x": "6+i*3.1+(0.9+i*0.28)*cos(t)",
+               "y": "42+(0.9+i*0.28)*sin(t)"}}
+  ]
+}

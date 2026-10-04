@@ -1,0 +1,9 @@
+{
+  "_comment": "One-liners in the faces that survive this machine. Cap height is set by the 80 mm page WIDTH, not by the box height you ask for -- a 14-character line in timesr tops out near 6 mm however much room you give it. Narrow faces (cursive, scriptc) therefore draw LARGER for the same line, which is most of why cursive looks best here.",
+  "shapes": [
+    {"text": "Slow is smooth",     "font": "timesr",  "align": "center", "box": [4, 1.5, 72, 10.0]},
+    {"text": "The pen knows",      "font": "futural", "align": "center", "box": [4, 13.0, 72, 9.0]},
+    {"text": "Ink finds paper",    "font": "cursive", "align": "center", "box": [4, 23.0, 72, 9.5]},
+    {"text": "One line at a time", "font": "futuram", "align": "center", "box": [4, 34.5, 72, 8.5]}
+  ]
+}

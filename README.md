@@ -3,13 +3,13 @@
 An [MCP](https://modelcontextprotocol.io) server that lets an AI agent draw with a
 [Line-us](https://www.line-us.com) robot drawing arm.
 
-Line-us was a small Kickstarter pen plotter: a three-servo arm that speaks G-code over
-TCP. The company is gone and the cloud service with it, but the hardware still works
-perfectly on the local network. This server puts it behind MCP so Claude (or any MCP
-client) can preview and draw.
+Line-us is a small pen plotter that started on Kickstarter: a three-servo arm that speaks
+G-code over TCP. It needs nothing beyond the local network: this server talks to it
+directly and puts it behind MCP, where any MCP client and the AI agent behind it can
+preview and draw.
 
 ```
-you      ──▶  Claude  ──▶  lineus-mcp  ──▶  TCP 1337  ──▶  Line-us
+you      ──▶  agent   ──▶  lineus-mcp  ──▶  TCP 1337  ──▶  Line-us
                               │
                         preview PNG ◀── see it before it draws
 ```
@@ -292,10 +292,16 @@ corners. Other projects hardcode it. The envelope here was measured over 45 prob
 
 ## Install
 
-The server is a Python package with a `lineus-mcp` command. The simplest way to run it is
-`uvx`, which installs it into an isolated environment on first use. GUI clients such as
-Claude Desktop don't inherit your shell `PATH`, so give them the **absolute** path to
-`uvx` (`command -v uvx`; with pyenv, `pyenv which uvx`).
+The server is a Python package with a `lineus-mcp` command, speaking MCP over stdio, so it
+works with any MCP client. The simplest way to run it is `uvx`, which installs it into an
+isolated environment on first use. Whatever the client, it needs:
+
+- **command**: `uvx`
+- **args**: `--from git+https://github.com/BenTeoNeb/lineus-mcp lineus-mcp`
+- **env**: `LINEUS_HOST=line-us.local`
+
+GUI clients don't inherit your shell `PATH`, so give them the **absolute** path to `uvx`
+(`command -v uvx`; with pyenv, `pyenv which uvx`). Two examples:
 
 **Claude Code**
 
@@ -304,7 +310,8 @@ claude mcp add lineus -e LINEUS_HOST=line-us.local -- \
   uvx --from git+https://github.com/BenTeoNeb/lineus-mcp lineus-mcp
 ```
 
-**Claude Desktop**: edit `claude_desktop_config.json`, then restart:
+**Claude Desktop**: edit `claude_desktop_config.json`, then restart. Many other clients
+use the same `mcpServers` shape in their own config file:
 
 ```json
 {

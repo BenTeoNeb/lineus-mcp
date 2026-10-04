@@ -114,6 +114,29 @@ of ~400 sampled ones. It is *centripetal* Catmull-Rom specifically — the unifo
 parameterisation puts cusps and little self-intersecting loops wherever control points
 bunch up, which is exactly where a drawn figure has them.
 
+### Draw with curves, not shapes
+
+The quickest way to make a drawing look childish is to assemble it from shapes: a circle
+for the head, ovals for hands, rectangles for limbs. It does not matter how carefully they
+are placed. The same figure drawn the way an illustrator draws reads as a drawing:
+
+1. **Proportions and pose first.** A person is about 6–6.5 heads tall, not 3, with the
+   weight on one leg and the shoulders tilted against the hips.
+2. **Long contours.** Each is a smooth path through a few well-placed points, and one line
+   runs through several parts: collar, shoulder and sleeve in a single stroke, or the whole
+   back.
+3. **Detail as open strokes.** A fold, a crease, an elbow or a knee is one short line, not
+   a closed outline.
+4. **Lines stop.** They end just short of the line they meet, and where something passes
+   in front of them.
+5. **Features belong to contours.** A nose is a bump in the profile line, not a shape
+   stuck on the face.
+
+`flowing_walker` is the worked example. It is the same character as an earlier
+shape-built attempt, redrawn with these rules and no reference image. Tall subjects
+should be drawn sideways along the page's 80 mm side, which gives 78 mm of height
+instead of 43.
+
 ### Hidden lines
 
 A pen cannot paint over a line, so "in front of" has to be done by **not drawing** the part
@@ -426,6 +449,9 @@ down"). Each carries a `_comment` explaining what made it work:
 - `layered_landscape.json` — sun, hatched mountains, hills and trees, listed back to front
   with `"occlude": true`. Nothing is clipped by hand; turn occlusion off and every layer
   shows through
+- `flowing_walker.json` — a figure walking, drawn sideways with curves alone. Long
+  contours, open creases, a nose in the profile line, and a back line that stops behind
+  the arm. No stock shapes, no reference image
 - `text_oneliners.json` — one-liners, with a note on why the page width sets your cap
   height rather than the box you ask for
 
@@ -433,6 +459,7 @@ Standalone generator scripts in [`examples/`](examples/), each printing a stroke
 can hand to `draw_paths`:
 
 - `layered_landscape.py` — generates `layered_landscape.json`
+- `flowing_walker.py` — generates `flowing_walker.json`
 - `harmonograph.py` — damped Lissajous figure, one unbroken stroke. The machine's best case.
 - `stipple.py` — tonal stippling by variable-radius Poisson sampling
 - `ladybug_lines.py` — line art with hatched fills

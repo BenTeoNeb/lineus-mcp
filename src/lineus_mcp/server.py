@@ -52,6 +52,16 @@ mcp = FastMCP("lineus", instructions=(
     "DRAWING WELL ON THIS MACHINE -- learned on paper, mostly by getting it wrong:\n"
     "- Prefer preview_scene/draw_scene over raw paths: curves are expressions, figures are "
     "smooth control points, and preview and draw are guaranteed to match.\n"
+    "- DRAW WITH CURVES, NOT SHAPES. A subject assembled from ellipses, circles and "
+    "polygons reads as a child's drawing however carefully it is placed. Draw the way an "
+    "illustrator does: (1) proportions and pose first -- a person is ~6-6.5 heads tall, "
+    "weight on one leg; (2) long contours as smooth paths through a few well-placed points, "
+    "one line running through several parts (collar-shoulder-sleeve, the whole back); "
+    "(3) detail as short OPEN strokes -- a fold, a crease, an elbow is one line, not a "
+    "closed outline; (4) a line stops short where it meets another and where something "
+    "passes in front of it; (5) features belong to contours -- a nose is a bump in the "
+    "profile line. Draw tall subjects sideways along the 80 mm side. Worked example: "
+    "get_example('flowing_walker').\n"
     "- Judge a drawing by the SIMULATED preview image, never the clean one. Every drawing "
     "that disappointed on paper looked fine as a clean render. Read the DRAWING CHECKS in "
     "the preview note: each names a location to fix.\n"
@@ -234,7 +244,9 @@ def preview_scene(scene: dict, simulate: bool = True) -> list:
 
     Producers (exactly one per shape):
       "param"  {"t":[start,stop,steps], "x":expr, "y":expr, "closed":bool}
-      "path"   [[u,v], ...]                      one stroke, the escape hatch
+      "path"   [[u,v], ...]                      one stroke; with "smooth": true, a
+                                                  curve through the points -- how figures
+                                                  are drawn
       "paths"  [[[u,v], ...], ...]               several strokes
       "text"   "a\nb", or [{"s":"a","font":"timesr"}, {"s":"b","font":"scriptc"}]
                with "font", "align" (left|center|right), "leading" (default 1.4)

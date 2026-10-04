@@ -25,6 +25,7 @@ def test_quiet_on_the_finished_drawings():
     assert not warnings_for(example("one_line_cat"))
     assert not warnings_for(example("geometric_fox"))
     assert not warnings_for(example("layered_landscape"))
+    assert not warnings_for(example("flowing_walker"))
 
 
 def test_mesh_without_join_is_drawn_twice():

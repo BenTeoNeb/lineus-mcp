@@ -3,7 +3,8 @@ import urllib.request
 
 import pytest
 
-from lineus_mcp import config, doodles
+from lineus_core import config
+from lineus_mcp import doodles
 from lineus_mcp.doodles import doodle_strokes, qd_bundle, qd_categories, qd_list, qd_web
 from lineus_mcp.expr import ExprError
 from lineus_mcp.scene import compile_scene

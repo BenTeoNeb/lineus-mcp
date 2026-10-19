@@ -102,7 +102,7 @@ def test_trace_is_a_scene_producer_fitted_to_the_page_by_default(tmp_path):
     d.ellipse((200, 100, 400, 300), outline=0, width=10)
     path = tmp_path / "ring.png"; im.save(path)
     st = compile_scene({"shapes": [{"trace": str(path)}]})
-    from lineus_mcp.config import CANVAS_H, CANVAS_W
+    from lineus_core.config import CANVAS_H, CANVAS_W
     assert len(st) == 1
     assert max(y for s in st for _, y in s) == pytest.approx(CANVAS_H, abs=0.01)
     assert max(x for s in st for x, _ in s) <= CANVAS_W + 0.01

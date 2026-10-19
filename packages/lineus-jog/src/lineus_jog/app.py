@@ -1,12 +1,15 @@
 """Drive the arm by hand: keyboard, mouse or gamepad, live, in a window.
 
-    lineus-jog                 # needs the 'jog' extra: uv sync --extra jog
+    lineus-jog                 # pip install lineus-jog, or uv sync in this repo
     lineus-jog --mock          # no robot, just the window
 
 Each G01 blocks until the arm has finished the move, so the arm cannot keep up with a
 60 Hz input loop. A background thread sends only the NEWEST target whenever the arm is
 free; inputs that arrive while it is busy are dropped, not queued. That keeps the lag to
 one move instead of letting it grow, and a curve becomes short chords between samples.
+
+The arm takes one connection at a time, so after a few idle seconds with the pen up this
+lets go of it, and lineus-mcp can draw while the window stays open.
 
 Positions are canvas mm, like everything else here. Moves that leave the measured
 envelope slide along its edge instead of being sent: the firmware would clamp them AND
@@ -22,7 +25,7 @@ import sys
 import threading
 import time
 
-from .config import (
+from lineus_core.config import (
     DEFAULT_SPEED,
     HOST,
     MIN_SEG_MM,
@@ -34,13 +37,20 @@ from .config import (
     TRAVEL_SPEED,
     TRAVEL_Z,
 )
-from .machine import envelope_bounds_mm, in_envelope, machine_to_canvas, pen_down_z, to_machine
-from .robot import Robot
+from lineus_core.machine import (
+    envelope_bounds_mm,
+    in_envelope,
+    machine_to_canvas,
+    pen_down_z,
+    to_machine,
+)
+from lineus_core.robot import Robot
 
 HOME_U, HOME_V = machine_to_canvas(1000, 1000)    # where G28 parks the arm
 SPEEDS = (5.0, 10.0, 20.0, 40.0)                  # stick / key speed levels, mm/s
 FINE = 0.2                                        # right stick and Shift: fraction of speed
 LEAD_MM = 6.0                                     # how far the cursor may run ahead of the arm
+IDLE_RELEASE = 5.0                                # s idle, pen up, before letting go of the arm
 DEADZONE = 0.15
 Z_STEP = 25                                       # pen-depth trim per press, machine Z units
 
@@ -130,6 +140,8 @@ class Link:
         self.dz = 0                               # live pen-depth trim, machine Z units
         self.strokes: list[list[tuple[float, float]]] = []
         self.status = "connecting"
+        self.connected = False
+        self.last_active = time.time()
         self.want_home = False
         self.stopping = False
         self.thread = threading.Thread(target=self._run, daemon=True)
@@ -139,8 +151,9 @@ class Link:
 
     def set(self, u: float, v: float, down: bool):
         with self.cv:
-            self.target = (u, v, down)
-            self.cv.notify()
+            if (u, v, down) != self.target:
+                self.target = (u, v, down)
+                self.cv.notify()
 
     def home(self):
         with self.cv:
@@ -210,35 +223,57 @@ class Link:
         return (down == adown and math.dist((u, v), (au, av)) < MIN_SEG_MM
                 and not (down and self.arm_z != self.z(au, av)))
 
+    def _ready(self) -> bool:
+        return self.stopping or self.want_home or not self._settled()
+
+    def _connect(self):
+        self.status = "connecting"
+        self.robot.hello()
+        self.robot.cmd(f"G94 S{self.speed}")
+        self.robot.cmd(f"G94 P{self.travel}")
+        self.connected, self.status = True, "ready"
+
+    def _release(self):
+        """Let go of the arm so lineus-mcp (or anything else) can draw; cmd() reconnects."""
+        self.robot.close()
+        self.connected, self.status = False, "idle: arm free for other clients"
+
     def _run(self):
-        while not self.stopping:
+        try:
+            self._connect()                          # say early whether the arm is there
+        except Exception as e:  # noqa: BLE001
+            self._release()
+            self.status = f"no link: {type(e).__name__}: {e}"
+        while True:
+            with self.cv:
+                while not self._ready():
+                    if (self.connected and not self.arm[2]
+                            and time.time() - self.last_active >= IDLE_RELEASE):
+                        self._release()
+                    self.cv.wait(timeout=min(1.0, IDLE_RELEASE))
+                if self.stopping:
+                    break
+                home, self.want_home = self.want_home, False
             try:
-                self.robot.hello()
-                self.robot.cmd(f"G94 S{self.speed}")
-                self.robot.cmd(f"G94 P{self.travel}")
-                self.status = "ready"
-                while True:
-                    with self.cv:
-                        while not (self.stopping or self.want_home or not self._settled()):
-                            self.cv.wait()
-                        if self.stopping:
-                            break
-                        home, self.want_home = self.want_home, False
-                    if home:
-                        self.robot.cmd("G28")
-                        self.arm = (HOME_U, HOME_V, False)
-                    else:
-                        self._step()
-            except Exception as e:  # noqa: BLE001  -- show it, then reconnect
-                self.robot.close()
+                if not self.connected:
+                    self._connect()
+                if home:
+                    self.robot.cmd("G28")
+                    self.arm = (HOME_U, HOME_V, False)
+                else:
+                    self._step()
+                self.last_active = time.time()
+            except Exception as e:  # noqa: BLE001  -- show it, then retry on the next input
+                self._release()
                 self.status = f"no link: {type(e).__name__}: {e}"
                 with self.cv:
                     self.cv.wait(timeout=2.0)
-        try:
-            au, av, _ = self.arm
-            self._send(au, av, TRAVEL_Z)             # never leave the pen on the paper
-        except Exception:  # noqa: BLE001
-            pass
+        if self.arm[2]:                              # never leave the pen on the paper
+            try:
+                au, av, _ = self.arm
+                self._send(au, av, TRAVEL_Z)
+            except Exception:  # noqa: BLE001
+                pass
         self.robot.close()
 
 
@@ -262,7 +297,7 @@ def main(argv: list[str] | None = None):
         import pygame
         from pygame._sdl2 import controller
     except ImportError:
-        sys.exit("lineus-jog needs pygame: uv sync --extra jog  (or pip install 'lineus-mcp[jog]')")
+        sys.exit("lineus-jog needs pygame-ce: pip install pygame-ce")
 
     pygame.init()
     controller.init()
@@ -284,7 +319,7 @@ def main(argv: list[str] | None = None):
             if reachable(i + 0.5, j + 0.5):
                 x, y = to_px(i, j)
                 bg.fill((226, 238, 226), (x, y, math.ceil(scale), math.ceil(scale)))
-    from .config import CANVAS_H, CANVAS_W
+    from lineus_core.config import CANVAS_H, CANVAS_W
     x0, y0 = to_px(0, 0); x1, y1 = to_px(CANVAS_W, CANVAS_H)
     pygame.draw.rect(bg, (170, 170, 170), (x0, y0, x1 - x0, y1 - y0), 1)
 

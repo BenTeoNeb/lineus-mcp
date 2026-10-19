@@ -31,7 +31,7 @@ class Robot:
     def __init__(self):
         self.sock: socket.socket | None = None
         self.banner = ""
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()     # close() is also called from inside cmd()
 
     def _connect(self):
         if MOCK:
@@ -76,10 +76,13 @@ class Robot:
         return self.banner
 
     def close(self):
-        if self.sock:
-            try: self.sock.close()
-            except OSError: pass
-        self.sock = None
+        """Let go of the arm. It takes one connection at a time, so a client that holds on
+        to it locks out every other one (lineus-jog, another server); cmd() reconnects."""
+        with self.lock:
+            if self.sock:
+                try: self.sock.close()
+                except OSError: pass
+            self.sock = None
 
 
 robot = Robot()
@@ -132,7 +135,18 @@ def run_job(job: Job):
             job.state, job.error = "error", f"{type(e).__name__}: {e}"
             try: robot.cmd("G01 Z1000")
             except Exception: pass
+        finally:
+            robot.close()
         job.finished = time.time()
+
+
+def release_if_idle():
+    """Let go of the arm unless a drawing is using it."""
+    if job_lock.acquire(blocking=False):
+        try:
+            robot.close()
+        finally:
+            job_lock.release()
 
 
 def _pen_z_report(strokes: list[Stroke]):

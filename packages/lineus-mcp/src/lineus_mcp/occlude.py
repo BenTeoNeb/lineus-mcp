@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import math
 
-from .config import Stroke
+from lineus_core.config import (
+    Stroke,
+)
 
 CLOSE_MM = 0.3      # a stroke whose ends are this close is a closed outline, so it occludes
 EDGE_MM = 0.05      # a line lying ON an occluder's edge is kept: shared edges must survive

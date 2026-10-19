@@ -5,7 +5,7 @@ import io
 import math
 import os
 
-from .config import (
+from lineus_core.config import (
     CANVAS_H,
     CANVAS_W,
     ENV_R_MAX,
@@ -13,15 +13,15 @@ from .config import (
     ENV_X_MIN,
     FLIP_U,
     FLIP_V,
-    NIB_MM,
-    PREVIEW_PATH,
     SWAP,
     UNITS_PER_MM,
     XMIN,
     YMIN,
     Stroke,
 )
-from .machine import envelope_bounds_mm, simulate_strokes
+from lineus_core.machine import envelope_bounds_mm, simulate_strokes
+
+from .config import NIB_MM, PREVIEW_PATH
 
 
 def render_png(strokes: list[Stroke], scale: float = 5.0) -> bytes:

@@ -1,9 +1,10 @@
 import math
+import time
 
-from lineus_mcp.config import PEN_DOWN_MAX, PEN_MARGIN, TRAVEL_Z
-from lineus_mcp.jog import HOME_U, HOME_V, Link, clamp_move, lead_ok, reachable, scene_of, stick
-from lineus_mcp.machine import pen_down_z, to_machine
-from lineus_mcp.scene import compile_scene
+from lineus_core.config import PEN_DOWN_MAX, PEN_MARGIN, TRAVEL_Z
+from lineus_core.machine import pen_down_z, to_machine
+from lineus_jog import app
+from lineus_jog.app import HOME_U, HOME_V, Link, clamp_move, lead_ok, reachable, scene_of, stick
 
 
 class FakeRobot:
@@ -107,7 +108,57 @@ def test_link_ignores_moves_below_the_robot_resolution():
     assert link._settled()
 
 
-def test_a_hand_drawing_saves_as_a_scene_that_compiles():
+def test_a_hand_drawing_saves_as_a_scene_and_drops_lone_dots():
     scene = scene_of([[(10, 10), (20, 15), (30, 10)], [(5, 5)]])
-    assert scene["shapes"][0]["paths"] == [[[10, 10], [20, 15], [30, 10]]]
-    assert compile_scene(scene)
+    assert scene["shapes"] == [{"paths": [[[10, 10], [20, 15], [30, 10]]]}]
+
+
+class SessionRobot(FakeRobot):
+    """Also counts connections and releases, like the real Robot."""
+    def __init__(self):
+        super().__init__(); self.hellos = self.closes = 0
+
+    def hello(self):
+        self.hellos += 1; return "hello"
+
+    def close(self):
+        self.closes += 1
+
+
+def wait_for(cond, timeout=3.0):
+    end = time.time() + timeout
+    while time.time() < end:
+        if cond():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def test_an_idle_jog_lets_go_of_the_arm_and_takes_it_back_on_the_next_move(monkeypatch):
+    monkeypatch.setattr(app, "IDLE_RELEASE", 0.1)
+    r = SessionRobot()
+    link = Link(r)
+    link.start()
+    try:
+        assert wait_for(lambda: link.status == "ready")
+        link.set(30, 20, False)
+        assert wait_for(lambda: not link.connected), "idle with the pen up: release the arm"
+        assert r.closes >= 1 and r.hellos == 1
+        link.set(31, 20, False)
+        assert wait_for(lambda: r.sent[-1] == g01(31, 20, TRAVEL_Z))
+        assert r.hellos == 2 and r.sent.count("G94 S5") == 2, "reconnect resends the step sizes"
+    finally:
+        link.stop()
+
+
+def test_a_jog_never_lets_go_with_the_pen_down(monkeypatch):
+    monkeypatch.setattr(app, "IDLE_RELEASE", 0.05)
+    link = Link(SessionRobot())
+    link.start()
+    try:
+        link.set(30, 20, True)
+        assert wait_for(lambda: link.arm[2])
+        time.sleep(0.3)
+        assert link.connected
+    finally:
+        link.stop()

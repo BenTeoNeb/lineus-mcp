@@ -6,10 +6,16 @@ import io
 import json
 import math
 
-from .config import CANVAS_H, CANVAS_W, MAX_POINTS, Stroke
+from lineus_core.config import (
+    CANVAS_H,
+    CANVAS_W,
+    MAX_POINTS,
+    Stroke,
+)
+from lineus_core.geometry import apply_fit, catmull_rom, fit_params, hatch_polygon
+
 from .doodles import doodle_strokes
 from .expr import Expr, ExprError
-from .geometry import apply_fit, catmull_rom, fit_params, hatch_polygon
 from .occlude import Occluder, closed_polygons, rejoin_hatch
 from .planner import plan_paths
 from .text import text_block

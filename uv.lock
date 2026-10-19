@@ -12,6 +12,19 @@ resolution-markers = [
     "python_full_version < '3.11' and sys_platform != 'win32'",
 ]
 
+[manifest]
+members = [
+    "lineus-core",
+    "lineus-jog",
+    "lineus-mcp",
+]
+
+[manifest.dependency-groups]
+dev = [
+    { name = "pytest", specifier = ">=8" },
+    { name = "ruff", specifier = ">=0.6" },
+]
+
 [[package]]
 name = "annotated-types"
 version = "0.8.0"
@@ -364,11 +377,32 @@ wheels = [
 ]
 
 [[package]]
+name = "lineus-core"
+version = "0.1.0"
+source = { editable = "packages/lineus-core" }
+
+[[package]]
+name = "lineus-jog"
+version = "0.1.0"
+source = { editable = "packages/lineus-jog" }
+dependencies = [
+    { name = "lineus-core" },
+    { name = "pygame-ce" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "lineus-core", editable = "packages/lineus-core" },
+    { name = "pygame-ce", specifier = ">=2.5" },
+]
+
+[[package]]
 name = "lineus-mcp"
 version = "0.1.0"
-source = { editable = "." }
+source = { editable = "packages/lineus-mcp" }
 dependencies = [
     { name = "hershey-fonts" },
+    { name = "lineus-core" },
     { name = "mcp" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
@@ -377,32 +411,14 @@ dependencies = [
     { name = "svgelements" },
 ]
 
-[package.optional-dependencies]
-jog = [
-    { name = "pygame-ce" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "ruff" },
-]
-
 [package.metadata]
 requires-dist = [
     { name = "hershey-fonts", specifier = ">=2.1" },
+    { name = "lineus-core", editable = "packages/lineus-core" },
     { name = "mcp", specifier = ">=1.2,<2" },
     { name = "numpy", specifier = ">=1.24" },
     { name = "pillow", specifier = ">=10" },
-    { name = "pygame-ce", marker = "extra == 'jog'", specifier = ">=2.5" },
     { name = "svgelements", specifier = ">=1.9" },
-]
-provides-extras = ["jog"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pytest", specifier = ">=8" },
-    { name = "ruff", specifier = ">=0.6" },
 ]
 
 [[package]]

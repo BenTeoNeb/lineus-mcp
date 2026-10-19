@@ -6,9 +6,13 @@ import json
 import math
 import os
 
-from .config import CACHE_DIR, DATA_DIR, Stroke
+from lineus_core.config import (
+    Stroke,
+)
+from lineus_core.geometry import catmull_rom
+
+from .config import CACHE_DIR, DATA_DIR
 from .expr import ExprError
-from .geometry import catmull_rom
 
 # Real drawings by real people, from Google's Quick, Draw! dataset (CC BY 4.0, see
 # doodles/NOTICE.md). They are stored as RECORDED PEN STROKES in the order the person drew

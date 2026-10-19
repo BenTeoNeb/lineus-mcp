@@ -21,7 +21,10 @@ import os
 
 import numpy as np
 
-from .config import Stroke
+from lineus_core.config import (
+    Stroke,
+)
+
 from .expr import ExprError
 
 MAX_RESOLUTION = 1500

@@ -1,8 +1,8 @@
 import math
 
 from conftest import example
-from lineus_mcp.checks import _proximity, lint_scene, small_feature_check
-from lineus_mcp.geometry import hatch_polygon
+from lineus_core.checks import _proximity, lint_scene, small_feature_check
+from lineus_core.geometry import hatch_polygon
 from lineus_mcp.scene import compile_scene, compile_scene_full
 
 

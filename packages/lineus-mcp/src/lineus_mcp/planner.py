@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import math
 
-from .config import Stroke
+from lineus_core.config import (
+    Stroke,
+)
 
 
 class _Welder:

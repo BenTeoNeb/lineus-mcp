@@ -21,11 +21,15 @@ dependencies = [
   "numpy>=1.24",
 ]
 
+[project.optional-dependencies]
+jog = ["pygame-ce>=2.5"]   # lineus-jog: drive the arm by keyboard, mouse or gamepad
+
 [project.urls]
 Repository = "https://github.com/BenTeoNeb/lineus-mcp"
 
 [project.scripts]
 lineus-mcp = "lineus_mcp.server:main"
+lineus-jog = "lineus_mcp.jog:main"
 
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.6"]

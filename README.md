@@ -353,6 +353,46 @@ use the same `mcpServers` shape in their own config file:
 
 **Try it without a robot:** set `LINEUS_MOCK=1`. Everything works except the moving.
 
+## Drive it by hand
+
+`lineus-jog` opens a window and moves the arm live from the keyboard, the mouse or a
+gamepad. It needs the `jog` extra (pygame):
+
+```sh
+uv sync --extra jog
+uv run lineus-jog              # --host 192.168.1.42, --mock, --speed 5, --debug-input
+```
+
+| | Gamepad | Keyboard | Mouse |
+|---|---|---|---|
+| Move | left stick | WASD / arrows | drag (pen down) |
+| Fine move | right stick | hold Shift | |
+| Pen | hold RT, or A to toggle | Space toggles | left button |
+| Lift | B | | |
+| Travel to a point | | | right-click |
+| Speed down / up | LB / RB | `[` / `]` | |
+| Press harder / lighter | D-pad down / up | `-` / `=` | |
+| Home | Start | H | |
+| Clear the trail | Back | C | |
+| Save the drawing | Y | Enter | |
+| Quit | | Esc | |
+
+Any gamepad SDL recognises works; an 8BitDo Pro paired in X-input mode shows up as an
+Xbox controller. The window shows the reachable envelope in green and the page in grey;
+moves into the edge slide along it rather than being sent. The arm finishes each move
+before taking the next, so the cursor (circle) leads the arm (dot) slightly and cannot
+run more than 6 mm ahead. Enter saves what was drawn as a `jog-*.json` scene that
+`preview_scene` and `draw_scene` replay.
+
+**Calibrating the pen.** After a pen change, put the pen down and trim the depth in steps
+of 25 while you draw: lower Z presses harder. The change applies at once, even with the
+arm standing still. Stop where the line is solid and the stroke ends are clean; the
+status line names the setting that keeps it (`LINEUS_PEN_DOWN_Z`, or `LINEUS_PEN_MARGIN`
+when a pen plane is set). The trim lasts only for that session.
+
+The arm takes one connection at a time. If the MCP server has drawn since it started, it
+still holds that connection: restart the MCP client (or its server) before jogging.
+
 ## Configuration
 
 | Variable | Default | Meaning |

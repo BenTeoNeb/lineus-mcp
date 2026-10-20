@@ -4,7 +4,11 @@ from __future__ import annotations
 import math
 import os
 
-from .config import DATA_DIR, Stroke
+from lineus_core.config import (
+    Stroke,
+)
+
+from .config import DATA_DIR
 
 
 def strokes_from_text(text: str, font: str = "futural") -> list[Stroke]:

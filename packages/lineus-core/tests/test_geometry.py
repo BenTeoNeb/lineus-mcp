@@ -1,7 +1,7 @@
 import math
 
 from conftest import ink
-from lineus_mcp.geometry import catmull_rom, fit, hatch_polygon, order_human
+from lineus_core.geometry import catmull_rom, fit, hatch_polygon, order_human
 
 SQUARE = [(0, 0), (20, 0), (20, 20), (0, 20)]
 

@@ -9,14 +9,23 @@ import time
 from mcp.server.fastmcp import FastMCP, Image
 from mcp.types import ToolAnnotations
 
-from .checks import lint_scene, small_feature_check
-from .config import CANVAS_H, CANVAS_W, DATA_DIR, DEFAULT_SPEED, HOST, SMALL_FEATURE_MM, Stroke
+from lineus_core.checks import lint_scene, small_feature_check
+from lineus_core.config import (
+    CANVAS_H,
+    CANVAS_W,
+    DEFAULT_SPEED,
+    HOST,
+    SMALL_FEATURE_MM,
+    Stroke,
+)
+from lineus_core.geometry import fit, order_human, simplify, travel_mm
+from lineus_core.machine import clearance_check, envelope_bounds_mm, envelope_check
+from lineus_core.robot import job_lock, jobs, release_if_idle, robot, submit
+
+from .config import DATA_DIR
 from .doodles import doodle_sheet, qd_bundle, qd_categories, qd_list
 from .expr import ExprError
-from .geometry import fit, order_human, simplify, travel_mm
-from .machine import clearance_check, envelope_bounds_mm, envelope_check
 from .render import render_png, write_preview
-from .robot import job_lock, jobs, robot, submit
 from .scene import compile_cached_full, strokes_from_svg
 from .text import STROKE_FONTS, stroke_font, strokes_from_stroke_font, strokes_from_text, text_block
 
@@ -104,6 +113,8 @@ def get_status() -> dict:
         diag = robot.cmd("M122")
     except Exception as e:  # noqa: BLE001
         return {"connected": False, "error": str(e), "host": HOST}
+    finally:
+        release_if_idle()
     last = max(jobs.values(), key=lambda j: j.started, default=None)
     umin, vmin, umax, vmax = envelope_bounds_mm()
     return {"connected": True, "banner": banner, "diagnostics": diag,
@@ -540,7 +551,10 @@ def abort() -> dict:
 def home() -> dict:
     """Lift the pen and move the arm to its home position."""
     with job_lock:
-        return {"result": robot.cmd("G28")}
+        try:
+            return {"result": robot.cmd("G28")}
+        finally:
+            robot.close()
 
 
 @mcp.tool(annotations=ToolAnnotations(

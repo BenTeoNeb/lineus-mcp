@@ -1,5 +1,6 @@
 """The README is checked like code: every name it mentions must exist, every scene it
 shows must compile."""
+import glob
 import json
 import os
 import re
@@ -9,8 +10,9 @@ from lineus_mcp.scene import compile_scene
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 README = open(os.path.join(ROOT, "README.md"), encoding="utf-8").read()
-SOURCE = "".join(open(os.path.join(ROOT, "src", "lineus_mcp", f), encoding="utf-8").read()
-                 for f in os.listdir(os.path.join(ROOT, "src", "lineus_mcp")) if f.endswith(".py"))
+# Settings live in all three packages: the arm's in lineus-core, the rest beside their code.
+SOURCE = "".join(open(f, encoding="utf-8").read() for f in
+                 glob.glob(os.path.join(ROOT, "..", "*", "src", "*", "*.py")))
 
 
 def test_every_tool_named_exists(run):

@@ -17,9 +17,9 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Install
-        run: uv sync --locked
+        run: uv sync --locked --all-packages
       - name: Lint
-        run: uv run ruff check src tests examples
+        run: uv run ruff check packages conftest.py
       - name: Test
         # no robot and no network needed: the server runs in mock mode and the doodle
         # web fetch is tested against a fake network

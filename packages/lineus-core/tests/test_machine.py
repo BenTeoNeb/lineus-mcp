@@ -1,7 +1,7 @@
 import math
 
-from lineus_mcp import config, machine
-from lineus_mcp.machine import (
+from lineus_core import config, machine
+from lineus_core.machine import (
     _blend,
     _radial,
     clearance_check,

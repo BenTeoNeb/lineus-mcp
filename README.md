@@ -4,6 +4,13 @@ Software for the [Line-us](https://www.line-us.com) robot drawing arm: a small p
 plotter that started on Kickstarter, a three-servo arm that speaks G-code over TCP on the
 local network.
 
+<p align="center">
+  <img src="docs/line-us-drawing.webp" width="360"
+       alt="Claude Code on a monitor answers 'Yes, I can draw', and below it the Line-us arm writes Yes! in cursive, then draws a harmonograph and a flower">
+  <br>
+  <em>Asked to draw, the agent answers “Yes, I can draw” — and does, through lineus-mcp (2× speed).</em>
+</p>
+
 There are two ways to drive it here, for two different hands on the pen:
 
 ```
@@ -17,6 +24,13 @@ a person      ──▶  lineus-jog  ──┘
 | [lineus-mcp](packages/lineus-mcp) | agents | An MCP server: a scene language, single-stroke handwriting, doodles, and a preview that simulates what the pen will really do |
 | [lineus-jog](packages/lineus-jog) | people | A window that moves the arm live from the keyboard, mouse or a gamepad, and calibrates the pen depth while you draw |
 | [lineus-core](packages/lineus-core) | both | The arm as measured: its reach, pen model, coordinate mapping and connection |
+
+<p align="center">
+  <img src="docs/line-us-drawing.jpg" width="640"
+       alt="A Line-us arm with a blue pen on white paper, under the handwritten word Yes!, a star, a looping harmonograph and flowers">
+  <br>
+  <em>The same page later, from above, the arm still at work on the last flower.</em>
+</p>
 
 The arm takes one connection at a time. Both tools let go of it when they are not using
 it, so you can draw with an agent and jog by hand without restarting either.
